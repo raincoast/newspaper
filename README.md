@@ -113,17 +113,28 @@ npm run dev
 - `31a`、`31A` 会按 `31` 参与 odd/even/from/to 规则计算（保留字母作为户信息）
 
 ## 部署到 Vercel
-1. 推送代码到 GitHub（或 GitLab/Bitbucket）
+
+### 数据库用什么
+Vercel 本身不提供“内建 PostgreSQL”。你需要 **外部托管的 PostgreSQL**，把控制台里的 **`postgresql://...` 连接串** 填到 Vercel 环境变量 `DATABASE_URL` 即可，例如：
+
+- [Vercel Postgres](https://vercel.com/docs/storage/vercel-postgres)（底层多为 Neon，与 Vercel 集成较好）
+- [Neon](https://neon.tech/)、[Supabase](https://supabase.com/)、[Railway](https://railway.app/) 等任意兼容 Postgres 的服务
+
+`prisma/schema.prisma` 已使用 `provider = "postgresql"`，因此连接串保持 Postgres 格式即可。
+
+### 构建与部署步骤
+1. 推送代码到 GitHub（或 GitLab/Bitbucket）。**不要把 `.next` 目录提交进仓库**（本仓库 `.gitignore` 已忽略）；若历史上误传过，需从 Git 中移除后再推。
 2. 在 [Vercel](https://vercel.com/) 导入仓库
-3. 在 Vercel 项目环境变量中配置：
-   - `DATABASE_URL`
-   - `NEXTAUTH_URL`（生产域名，如 `https://your-app.vercel.app`）
-   - `NEXTAUTH_SECRET`
-4. 在数据库执行 Prisma 迁移（建议在本地或 CI）：
-   - `npx prisma migrate deploy`
-5. （可选）初始化演示数据：
+3. 构建命令保持默认 `npm run build` 即可：本项目已在 `build` 脚本中加入 `prisma generate`，避免 Vercel 依赖缓存导致 Prisma Client 未生成而构建失败。
+4. 在 Vercel 项目 **Settings → Environment Variables** 中配置：
+   - `DATABASE_URL`（上一步 Postgres 提供的 URI）
+   - `NEXTAUTH_URL`（生产完整 URL，如 `https://your-app.vercel.app`，须与实际域名一致）
+   - `NEXTAUTH_SECRET`（随机长字符串）
+5. 首次上线前，在本地或任意能访问该数据库的环境执行迁移：
+   - `DATABASE_URL=... npx prisma migrate deploy`
+6. （可选）初始化演示数据（同样需能连上生产库）：
    - `npm run prisma:seed`
-6. 重新部署并验证：
+7. 重新部署并验证：
    - 登录
    - 区域切换
    - 地图门牌状态更新
