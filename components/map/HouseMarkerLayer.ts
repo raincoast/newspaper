@@ -1,6 +1,6 @@
 "use client"
 
-import type { ExpressionSpecification, GeoJSONSource, Map } from "maplibre-gl"
+import type { ExpressionSpecification, GeoJSONSource, Map, MapLayerMouseEvent } from "maplibre-gl"
 import type { ApartmentGroupOverlay, HouseMarkerDTO } from "./types"
 
 /** 区域编辑多边形需叠放在门牌圆点下方 */
@@ -57,10 +57,10 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
         "circle-radius": [
           "case",
           ["==", ["get", "is_focus"], true],
-          26,
+          30,
           ["==", ["get", "is_conflict"], true],
-          22,
-          20
+          26,
+          24
         ],
         "circle-color": [
           "case",
@@ -106,7 +106,7 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
           ["to-string", ["get", "label"]],
           ["to-string", ["get", "number"]]
         ] as ExpressionSpecification,
-        "text-size": 12,
+        "text-size": 13,
         "text-anchor": "center",
         "text-allow-overlap": true,
         "text-ignore-placement": true
@@ -265,28 +265,43 @@ export function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
   }
 }
 
-export function bindHouseMarkerClick(
-  map: Map,
-  onMarkerClick: (markerId: string) => void
-) {
+function ensureDelegatedHandlers(map: Map) {
   const mapAny = map as any
+  if (mapAny._houseMarkerDelegatedClick) return
+
+  mapAny._houseMarkerDelegatedClick = (event: MapLayerMouseEvent) => {
+    const feature = event.features?.[0]
+    const markerId = String(feature?.properties?.id ?? "")
+    if (!markerId) return
+    const cb = mapAny._houseMarkerClickLatest as ((id: string) => void) | undefined
+    cb?.(markerId)
+  }
+
+  mapAny._houseMarkerDelegatedEnter = () => {
+    map.getCanvas().style.cursor = "pointer"
+  }
+  mapAny._houseMarkerDelegatedLeave = () => {
+    map.getCanvas().style.cursor = ""
+  }
+}
+
+/** 每次调用都会更新实际回调；地图事件只注册一次，避免闭包陈旧导致点击无响应 */
+export function bindHouseMarkerClick(map: Map, onMarkerClick: (markerId: string) => void) {
+  const mapAny = map as any
+  mapAny._houseMarkerClickLatest = onMarkerClick
+  ensureDelegatedHandlers(map)
+
+  const delegated = mapAny._houseMarkerDelegatedClick as (e: MapLayerMouseEvent) => void
+  const enter = mapAny._houseMarkerDelegatedEnter as () => void
+  const leave = mapAny._houseMarkerDelegatedLeave as () => void
 
   const mainLayers = [CIRCLE_LAYER_ID, TEXT_LAYER_ID]
 
   if (!mapAny._houseMarkerClickBound) {
     for (const layerId of mainLayers) {
-      map.on("click", layerId, (event) => {
-        const feature = event.features?.[0]
-        const markerId = String(feature?.properties?.id ?? "")
-        if (!markerId) return
-        onMarkerClick(markerId)
-      })
-      map.on("mouseenter", layerId, () => {
-        map.getCanvas().style.cursor = "pointer"
-      })
-      map.on("mouseleave", layerId, () => {
-        map.getCanvas().style.cursor = ""
-      })
+      map.on("click", layerId, delegated)
+      map.on("mouseenter", layerId, enter)
+      map.on("mouseleave", layerId, leave)
     }
     mapAny._houseMarkerClickBound = true
   }
@@ -294,18 +309,9 @@ export function bindHouseMarkerClick(
   if (map.getLayer(NEARBY_CIRCLE_LAYER_ID) && !mapAny._nearbyHouseMarkerClickBound) {
     for (const layerId of [NEARBY_CIRCLE_LAYER_ID, NEARBY_TEXT_LAYER_ID]) {
       if (!map.getLayer(layerId)) continue
-      map.on("click", layerId, (event) => {
-        const feature = event.features?.[0]
-        const markerId = String(feature?.properties?.id ?? "")
-        if (!markerId) return
-        onMarkerClick(markerId)
-      })
-      map.on("mouseenter", layerId, () => {
-        map.getCanvas().style.cursor = "pointer"
-      })
-      map.on("mouseleave", layerId, () => {
-        map.getCanvas().style.cursor = ""
-      })
+      map.on("click", layerId, delegated)
+      map.on("mouseenter", layerId, enter)
+      map.on("mouseleave", layerId, leave)
     }
     mapAny._nearbyHouseMarkerClickBound = true
   }

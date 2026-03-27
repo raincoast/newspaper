@@ -24,7 +24,8 @@ import {
 import { removeUserLocationLayer, upsertUserLocationLayer } from "./UserLocationLayer"
 import { RegionBoundsEditor, ringToLngLatBounds, type RingPoint } from "./regionBoundsEditor"
 
-const KONSTANZ_JBS: [number, number] = [9.17145, 47.66365]
+/** Jacob-Burckhardt-Straße 4 一带（OSM 建筑坐标） */
+const KONSTANZ_JBS: [number, number] = [9.184665, 47.6815884]
 
 const iconBtn =
   "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white/50 text-gray-900 shadow-sm backdrop-blur"
@@ -45,25 +46,6 @@ function normalizeRing(raw: unknown): RingPoint[] | null {
 
 const glassPanel =
   "rounded-xl border border-black/10 bg-white/50 shadow-sm backdrop-blur"
-
-function AreaToolIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden className="text-gray-800">
-      <path
-        d="M4 4h4v4H4V4zm12 0h4v4h-4V4zM4 16h4v4H4v-4zm12 0h4v4h-4v-4z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8 6h8M6 8v8m12 0V8M8 18h8"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
 
 type MarkerSheet = "none" | "focus" | "actions"
 
@@ -106,6 +88,9 @@ export default function MapView({
     Array<{ lat: number; lng: number; label: string }>
   >([])
   const [searchBusy, setSearchBusy] = useState(false)
+  const [mapReady, setMapReady] = useState(false)
+  const geocodeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const geoWatchIdRef = useRef<number | null>(null)
 
   const editModeRef = useRef<string | null>(null)
   const deliveryActiveRef = useRef(false)
@@ -196,12 +181,6 @@ export default function MapView({
       .filter(Boolean) as Array<{ id: string; coordinates: [number, number][] }>
   }, [markers, selectedMarker])
 
-  function onMarkerSelect(markerId: string) {
-    if (editModeRef.current) return
-    setSelectedMarkerId(markerId)
-    setMarkerSheet(deliveryActiveRef.current ? "actions" : "focus")
-  }
-
   function closeMarkerSheets() {
     setSelectedMarkerId(null)
     setMarkerSheet("none")
@@ -234,19 +213,16 @@ export default function MapView({
       zoom: 16
     })
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right")
-
     map.on("load", () => {
       upsertHouseMarkerLayer(map, [])
-      bindHouseMarkerClick(map, (markerId) => {
-        onMarkerSelect(markerId)
-      })
+      setMapReady(true)
     })
 
     mapRef.current = map
 
     return () => {
       if (!mapRef.current) return
+      setMapReady(false)
       boundsEditorRef.current?.destroy()
       boundsEditorRef.current = null
       removeUserLocationLayer(mapRef.current)
@@ -278,6 +254,16 @@ export default function MapView({
     }
     loadMarkers()
   }, [selectedRegionId])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded() || !mapReady) return
+    bindHouseMarkerClick(map, (markerId) => {
+      if (editModeRef.current) return
+      setSelectedMarkerId(markerId)
+      setMarkerSheet(deliveryActiveRef.current ? "actions" : "focus")
+    })
+  }, [mapReady, markers, nearbyMarkers, userLocation])
 
   const fitKey = useMemo(() => {
     const r = regionsLocal.find((x) => x.id === selectedRegionId)
@@ -348,9 +334,6 @@ export default function MapView({
 
     upsertUserLocationLayer(map, userLocation, true)
     upsertNearbyHouseMarkerLayer(map, nearbyMarkers)
-    bindHouseMarkerClick(map, (markerId) => {
-      onMarkerSelect(markerId)
-    })
   }, [userLocation, nearbyMarkers])
 
   useEffect(() => {
@@ -376,6 +359,52 @@ export default function MapView({
     }
   }, [editRegionId])
 
+  function applyGeoPosition(pos: GeolocationPosition) {
+    setGeoError(null)
+    setUserLocation({
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      accuracy: pos.coords.accuracy
+    })
+  }
+
+  function onGeoError(err: GeolocationPositionError) {
+    if (err.code === err.PERMISSION_DENIED) {
+      setGeoError("定位权限被拒绝；Safari 无痕请点击「定位」按钮并允许一次")
+    } else {
+      setGeoError("定位失败，请重试或点击「定位」")
+    }
+  }
+
+  const geoOpts: PositionOptions = {
+    enableHighAccuracy: true,
+    maximumAge: 60_000,
+    timeout: 20_000
+  }
+
+  /** 用户点击按钮触发，兼容 Safari 无痕下 watchPosition 不弹窗的问题 */
+  function requestLocationFromUser() {
+    if (!("geolocation" in navigator)) {
+      setGeoError("当前浏览器不支持定位")
+      return
+    }
+    setGeoError(null)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        applyGeoPosition(pos)
+        if (geoWatchIdRef.current === null) {
+          geoWatchIdRef.current = navigator.geolocation.watchPosition(
+            applyGeoPosition,
+            onGeoError,
+            geoOpts
+          )
+        }
+      },
+      onGeoError,
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 25_000 }
+    )
+  }
+
   useEffect(() => {
     if (!("geolocation" in navigator)) {
       setGeoError("当前浏览器不支持定位")
@@ -383,30 +412,18 @@ export default function MapView({
     }
 
     setGeoError(null)
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        setGeoError(null)
-        setUserLocation({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy
-        })
-      },
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setGeoError("定位权限被拒绝，请在浏览器设置中允许定位")
-        } else {
-          setGeoError("定位失败，请稍后重试")
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 5000,
-        timeout: 8000
-      }
+    geoWatchIdRef.current = navigator.geolocation.watchPosition(
+      applyGeoPosition,
+      onGeoError,
+      geoOpts
     )
 
-    return () => navigator.geolocation.clearWatch(watchId)
+    return () => {
+      if (geoWatchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(geoWatchIdRef.current)
+        geoWatchIdRef.current = null
+      }
+    }
   }, [])
 
   async function updateMarkerStatus(status: DeliveryStatus) {
@@ -494,13 +511,17 @@ export default function MapView({
     })
   }
 
-  async function runSearch(e: React.FormEvent) {
-    e.preventDefault()
-    const q = searchQ.trim()
-    if (q.length < 2) return
+  async function fetchGeocodeHits(q: string) {
+    const trimmed = q.trim()
+    if (trimmed.length < 2) {
+      setSearchHits([])
+      return
+    }
     setSearchBusy(true)
     try {
-      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`)
+      const res = await fetch(
+        `/api/geocode?q=${encodeURIComponent(trimmed)}&countrycodes=de`
+      )
       if (!res.ok) {
         setSearchHits([])
         return
@@ -512,6 +533,29 @@ export default function MapView({
     } finally {
       setSearchBusy(false)
     }
+  }
+
+  useEffect(() => {
+    if (!editRegionId) return
+    if (geocodeDebounceRef.current) clearTimeout(geocodeDebounceRef.current)
+    const q = searchQ.trim()
+    if (q.length < 2) {
+      setSearchHits([])
+      return
+    }
+    geocodeDebounceRef.current = setTimeout(() => {
+      void fetchGeocodeHits(q)
+    }, 320)
+    return () => {
+      if (geocodeDebounceRef.current) clearTimeout(geocodeDebounceRef.current)
+    }
+  }, [searchQ, editRegionId])
+
+  async function runSearch(e: React.FormEvent) {
+    e.preventDefault()
+    const q = searchQ.trim()
+    if (q.length < 2) return
+    await fetchGeocodeHits(q)
   }
 
   async function saveBounds() {
@@ -557,7 +601,7 @@ export default function MapView({
             <input
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
-              placeholder="搜索地点…"
+              placeholder="搜索地点（英文 / 德文，实时提示）"
               className={[
                 "w-full rounded-xl border border-black/10 px-3 py-2.5 text-sm text-black shadow-sm backdrop-blur",
                 "bg-white/50 placeholder:text-gray-500",
@@ -595,7 +639,7 @@ export default function MapView({
               className={iconBtn}
               aria-label="框选区域"
             >
-              <AreaToolIcon />
+              <span className="material-symbols-outlined text-[22px] leading-none">crop_free</span>
             </button>
             <div className="flex max-w-[min(92vw,400px)] flex-row gap-2">
               <button
@@ -718,13 +762,19 @@ export default function MapView({
               </div>
 
               <div className="pointer-events-auto flex flex-col gap-2 pb-1">
-                {userLocation ? (
-                  <button type="button" onClick={backToMe} className={iconBtn} aria-label="回到我的位置">
-                    <span className="material-symbols-outlined text-[22px] leading-none">
-                      location_searching
-                    </span>
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (userLocation) backToMe()
+                    else requestLocationFromUser()
+                  }}
+                  className={iconBtn}
+                  aria-label={userLocation ? "回到我的位置" : "请求定位（Safari 无痕请点此）"}
+                >
+                  <span className="material-symbols-outlined text-[22px] leading-none">
+                    location_searching
+                  </span>
+                </button>
               </div>
             </div>
 

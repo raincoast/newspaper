@@ -89,40 +89,41 @@ async function main() {
 
   if (regionA) {
     await prisma.houseMarker.deleteMany({ where: { regionId: regionA.id } })
-    // Konstanz · Jacob-Burckhardt-Strasse 4 附近示例门牌
-    const jbsLat = 47.66365
-    const jbsLng = 9.17145
+    // Konstanz · Jacob-Burckhardt-Straße — OSM 建筑 Sonnenbühl West I 门牌 4，近邻坐标沿街道推算至与瓦片上门牌对齐
+    const jbs4 = { lat: 47.6815884, lng: 9.184665 }
+    const jbs2 = { lat: 47.681628, lng: 9.184318 }
+    const jbs6 = { lat: 47.681552, lng: 9.185028 }
     await prisma.houseMarker.createMany({
       data: [
         {
           regionId: regionA.id,
-          street_name: "Jacob-Burckhardt-Strasse",
+          street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "2",
           current_housenumber: "2",
           delivery_status: "NOT_DELIVERED",
           building_id: "building_A_1",
-          lat: jbsLat + 0.00035,
-          lng: jbsLng - 0.00025
+          lat: jbs2.lat,
+          lng: jbs2.lng
         },
         {
           regionId: regionA.id,
-          street_name: "Jacob-Burckhardt-Strasse",
+          street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "4",
           current_housenumber: "4",
           delivery_status: "DELIVERED",
           building_id: "building_A_1",
-          lat: jbsLat,
-          lng: jbsLng
+          lat: jbs4.lat,
+          lng: jbs4.lng
         },
         {
           regionId: regionA.id,
-          street_name: "Jacob-Burckhardt-Strasse",
+          street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "6",
           current_housenumber: "6",
           delivery_status: "NO_ADVERTISE",
           building_id: "building_A_2",
-          lat: jbsLat - 0.00028,
-          lng: jbsLng + 0.00022
+          lat: jbs6.lat,
+          lng: jbs6.lng
         }
       ]
     })
