@@ -25,6 +25,12 @@ export async function GET(request: NextRequest) {
     if (!assignment) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
+  const regionRow = await prisma.region.findUnique({
+    where: { id: regionId },
+    select: { deliveryFocusHouseMarkerId: true }
+  })
+  const focusId = regionRow?.deliveryFocusHouseMarkerId ?? null
+
   const markers = await prisma.houseMarker.findMany({
     where: {
       regionId,
@@ -80,7 +86,8 @@ export async function GET(request: NextRequest) {
           ? "delivered"
           : "pending",
     is_conflict: Boolean(conflictMap.get(m.id)?.is_conflict),
-    conflict_peer_ids: conflictMap.get(m.id)?.peerIds ?? []
+    conflict_peer_ids: conflictMap.get(m.id)?.peerIds ?? [],
+    is_delivery_focus: m.id === focusId
   }))
 
   // 公寓/建筑聚合：优先 apartment_group_id，否则 building_id；仅对 2+ 门牌输出
@@ -119,6 +126,10 @@ export async function GET(request: NextRequest) {
       }
     })
 
-  return NextResponse.json({ markers: markerDtos, apartment_groups })
+  return NextResponse.json({
+    markers: markerDtos,
+    apartment_groups,
+    deliveryFocusHouseMarkerId: focusId
+  })
 }
 

@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import maplibregl, { type LngLatBoundsLike, type Map } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
+import Link from "next/link"
+import { signOut } from "next-auth/react"
 import { useRouter } from "next/navigation"
 
+import DeliveryFocusSheet from "./DeliveryFocusSheet"
 import MarkerActionSheet from "./MarkerActionSheet"
 import RegionManageModal from "./RegionManageModal"
 import RegionSwitcher from "./RegionSwitcher"
@@ -23,6 +26,9 @@ import { RegionBoundsEditor, ringToLngLatBounds, type RingPoint } from "./region
 
 const KONSTANZ_JBS: [number, number] = [9.17145, 47.66365]
 
+const iconBtn =
+  "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-black/10 bg-white/50 text-gray-900 shadow-sm backdrop-blur"
+
 function normalizeRing(raw: unknown): RingPoint[] | null {
   if (!raw || !Array.isArray(raw) || raw.length !== 4) return null
   const out: RingPoint[] = []
@@ -39,20 +45,6 @@ function normalizeRing(raw: unknown): RingPoint[] | null {
 
 const glassPanel =
   "rounded-xl border border-black/10 bg-white/50 shadow-sm backdrop-blur"
-
-function RegionListIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden className="text-gray-800">
-      <path
-        d="M5 6h14M5 12h14M5 18h8"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-      />
-      <circle cx="18" cy="18" r="2.25" stroke="currentColor" strokeWidth="1.5" fill="none" />
-    </svg>
-  )
-}
 
 function AreaToolIcon() {
   return (
@@ -73,12 +65,16 @@ function AreaToolIcon() {
   )
 }
 
+type MarkerSheet = "none" | "focus" | "actions"
+
 export default function MapView({
   regions,
-  initialRegionId
+  initialRegionId,
+  isAdmin = false
 }: {
   regions: RegionLite[]
   initialRegionId: string | null
+  isAdmin?: boolean
 }) {
   const router = useRouter()
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
@@ -89,7 +85,9 @@ export default function MapView({
   const [markers, setMarkers] = useState<HouseMarkerDTO[]>([])
   const [apartmentGroups, setApartmentGroups] = useState<ApartmentGroupOverlay[]>([])
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null)
+  const [markerSheet, setMarkerSheet] = useState<MarkerSheet>("none")
   const [statusLoading, setStatusLoading] = useState(false)
+  const [focusLoading, setFocusLoading] = useState(false)
 
   const [userLocation, setUserLocation] = useState<{
     lat: number
@@ -99,6 +97,7 @@ export default function MapView({
   const [geoError, setGeoError] = useState<string | null>(null)
   const [deliveryActive, setDeliveryActive] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
 
   const [manageOpen, setManageOpen] = useState(false)
   const [editRegionId, setEditRegionId] = useState<string | null>(null)
@@ -109,6 +108,7 @@ export default function MapView({
   const [searchBusy, setSearchBusy] = useState(false)
 
   const editModeRef = useRef<string | null>(null)
+  const deliveryActiveRef = useRef(false)
   const regionsRef = useRef(regionsLocal)
   regionsRef.current = regionsLocal
   const boundsEditorRef = useRef<RegionBoundsEditor | null>(null)
@@ -124,6 +124,10 @@ export default function MapView({
   useEffect(() => {
     editModeRef.current = editRegionId
   }, [editRegionId])
+
+  useEffect(() => {
+    deliveryActiveRef.current = deliveryActive
+  }, [deliveryActive])
 
   const selectedMarker = useMemo(
     () => markers.find((m) => m.id === selectedMarkerId) ?? null,
@@ -192,6 +196,17 @@ export default function MapView({
       .filter(Boolean) as Array<{ id: string; coordinates: [number, number][] }>
   }, [markers, selectedMarker])
 
+  function onMarkerSelect(markerId: string) {
+    if (editModeRef.current) return
+    setSelectedMarkerId(markerId)
+    setMarkerSheet(deliveryActiveRef.current ? "actions" : "focus")
+  }
+
+  function closeMarkerSheets() {
+    setSelectedMarkerId(null)
+    setMarkerSheet("none")
+  }
+
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return
 
@@ -222,13 +237,10 @@ export default function MapView({
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right")
 
     map.on("load", () => {
-      void (async () => {
-        await upsertHouseMarkerLayer(map, [])
-        bindHouseMarkerClick(map, (markerId) => {
-          if (editModeRef.current) return
-          setSelectedMarkerId(markerId)
-        })
-      })()
+      upsertHouseMarkerLayer(map, [])
+      bindHouseMarkerClick(map, (markerId) => {
+        onMarkerSelect(markerId)
+      })
     })
 
     mapRef.current = map
@@ -257,7 +269,11 @@ export default function MapView({
         markers: HouseMarkerDTO[]
         apartment_groups: ApartmentGroupOverlay[]
       }
-      setMarkers(data.markers)
+      const normalized = (data.markers ?? []).map((m) => ({
+        ...m,
+        is_delivery_focus: Boolean(m.is_delivery_focus)
+      }))
+      setMarkers(normalized)
       setApartmentGroups(data.apartment_groups ?? [])
     }
     loadMarkers()
@@ -311,9 +327,7 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
-    void (async () => {
-      await upsertHouseMarkerLayer(map, markers)
-    })()
+    upsertHouseMarkerLayer(map, markers)
   }, [markers])
 
   useEffect(() => {
@@ -328,18 +342,15 @@ export default function MapView({
 
     if (!userLocation) {
       removeUserLocationLayer(map)
-      void upsertNearbyHouseMarkerLayer(map, [])
+      upsertNearbyHouseMarkerLayer(map, [])
       return
     }
 
     upsertUserLocationLayer(map, userLocation, true)
-    void (async () => {
-      await upsertNearbyHouseMarkerLayer(map, nearbyMarkers)
-      bindHouseMarkerClick(map, (markerId) => {
-        if (editModeRef.current) return
-        setSelectedMarkerId(markerId)
-      })
-    })()
+    upsertNearbyHouseMarkerLayer(map, nearbyMarkers)
+    bindHouseMarkerClick(map, (markerId) => {
+      onMarkerSelect(markerId)
+    })
   }, [userLocation, nearbyMarkers])
 
   useEffect(() => {
@@ -412,7 +423,7 @@ export default function MapView({
     setMarkers((prev) =>
       prev.map((m) => (m.id === selectedMarker.id ? { ...m, delivery_status: status } : m))
     )
-    setSelectedMarkerId(null)
+    closeMarkerSheets()
   }
 
   async function removeFromPlan() {
@@ -427,7 +438,7 @@ export default function MapView({
     if (!res.ok) return
 
     setMarkers((prev) => prev.filter((m) => m.id !== selectedMarker.id))
-    setSelectedMarkerId(null)
+    closeMarkerSheets()
   }
 
   async function updateHousenumber(newNumber: string) {
@@ -451,7 +462,27 @@ export default function MapView({
         m.id === selectedMarker.id ? { ...m, current_housenumber: newNumber } : m
       )
     )
-    setSelectedMarkerId(null)
+    closeMarkerSheets()
+  }
+
+  async function setRegionDeliveryFocus() {
+    if (!selectedMarker || !selectedRegionId) return
+    setFocusLoading(true)
+    const res = await fetch(`/api/regions/${selectedRegionId}/delivery-focus`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ houseMarkerId: selectedMarker.id })
+    })
+    setFocusLoading(false)
+    if (!res.ok) return
+
+    setMarkers((prev) =>
+      prev.map((m) => ({
+        ...m,
+        is_delivery_focus: m.id === selectedMarker.id
+      }))
+    )
+    closeMarkerSheets()
   }
 
   function backToMe() {
@@ -505,11 +536,17 @@ export default function MapView({
     lastFitKeyRef.current = ""
   }
 
+  function cancelEdit() {
+    setEditRegionId(null)
+    lastFitKeyRef.current = ""
+    router.refresh()
+  }
+
   const inEdit = Boolean(editRegionId)
 
   return (
-    <div className="relative h-[calc(100vh-9.5rem)] w-full overflow-hidden rounded-2xl border border-black/10">
-      <div ref={mapContainerRef} className="h-full w-full" />
+    <div className="relative h-full min-h-0 w-full flex-1 overflow-hidden">
+      <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
 
       {inEdit ? (
         <>
@@ -551,37 +588,40 @@ export default function MapView({
             ) : null}
           </form>
 
-          <div className="pointer-events-auto absolute bottom-4 left-3 z-40">
+          <div className="pointer-events-auto absolute bottom-3 left-3 z-40 flex flex-col gap-2">
             <button
               type="button"
               onClick={() => boundsEditorRef.current?.addRectangle()}
-              className={[
-                "flex h-11 w-11 items-center justify-center rounded-xl border border-black/10",
-                "bg-white/50 shadow-sm backdrop-blur"
-              ].join(" ")}
+              className={iconBtn}
               aria-label="框选区域"
             >
               <AreaToolIcon />
             </button>
-          </div>
-
-          <div className="pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(92vw,340px)] -translate-x-1/2">
-            <button
-              type="button"
-              onClick={() => void saveBounds()}
-              className={[
-                "w-full rounded-xl border border-white/30 px-4 py-3 text-center text-sm font-medium text-white shadow-sm backdrop-blur",
-                "bg-green-600/50 hover:bg-green-600/60"
-              ].join(" ")}
-            >
-              保存当前设置
-            </button>
+            <div className="flex max-w-[min(92vw,400px)] flex-row gap-2">
+              <button
+                type="button"
+                onClick={() => void saveBounds()}
+                className={[
+                  "min-h-12 flex-1 rounded-xl border border-white/30 px-4 py-3 text-center text-sm font-medium text-white shadow-sm backdrop-blur",
+                  "bg-green-600/50 hover:bg-green-600/60"
+                ].join(" ")}
+              >
+                保存当前设置
+              </button>
+              <button
+                type="button"
+                onClick={cancelEdit}
+                className="inline-flex h-12 min-w-[4.5rem] shrink-0 items-center justify-center rounded-xl bg-red-600 px-3 text-sm font-medium text-white shadow-sm"
+              >
+                取消
+              </button>
+            </div>
           </div>
         </>
       ) : (
         <>
           <div className="pointer-events-none absolute left-3 right-3 top-3 z-20 flex items-start justify-between gap-2">
-            <div className="pointer-events-auto flex flex-col gap-2">
+            <div className="pointer-events-auto max-w-[min(200px,45vw)]">
               <RegionSwitcher
                 regions={regionsLocal}
                 selectedRegionId={selectedRegionId}
@@ -591,25 +631,14 @@ export default function MapView({
                   router.push(`/map?regionId=${encodeURIComponent(regionId)}`)
                 }}
               />
-              <button
-                type="button"
-                onClick={() => setManageOpen(true)}
-                className={[
-                  "flex h-11 w-11 items-center justify-center rounded-xl border border-black/10",
-                  "bg-white/50 shadow-sm backdrop-blur"
-                ].join(" ")}
-                aria-label="管理区域"
-              >
-                <RegionListIcon />
-              </button>
             </div>
-            <div className="pointer-events-auto w-[min(240px,calc(100vw-7rem))]">
+            <div className="pointer-events-auto w-[min(220px,calc(100vw-8rem))]">
               <StatsCard markers={markers} />
             </div>
           </div>
 
           {nextMarker ? (
-            <div className="pointer-events-none absolute left-3 top-[7.5rem] z-30 rounded-xl bg-green-600 px-3 py-2 text-white shadow-sm">
+            <div className="pointer-events-none absolute left-3 top-[5.5rem] z-30 rounded-xl bg-green-600 px-3 py-2 text-white shadow-sm">
               <div className="text-[11px] opacity-90">下一个投递门牌</div>
               <div className="text-lg font-bold">{nextMarker.marker.current_housenumber}</div>
             </div>
@@ -617,38 +646,108 @@ export default function MapView({
 
           {geoError ? (
             <div
-              className={`pointer-events-none absolute left-3 right-3 top-[7.5rem] z-30 rounded-xl p-2 text-xs text-red-600 shadow-sm backdrop-blur ${glassPanel}`}
+              className={`pointer-events-none absolute left-3 right-3 top-[5.5rem] z-30 rounded-xl p-2 text-xs text-red-600 shadow-sm backdrop-blur ${glassPanel}`}
             >
               {geoError}
             </div>
           ) : null}
 
-          {userLocation ? (
-            <div className="pointer-events-auto absolute bottom-24 right-3 z-30">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
+            <div className="flex items-end justify-between px-3 pb-2">
+              <div className="pointer-events-auto flex flex-col gap-2">
+                <div className="relative">
+                  <button
+                    type="button"
+                    className={iconBtn}
+                    aria-label="账号"
+                    onClick={() => setAccountOpen((o) => !o)}
+                  >
+                    <span className="material-symbols-outlined text-[22px] leading-none">
+                      account_circle
+                    </span>
+                  </button>
+                  {accountOpen ? (
+                    <>
+                      <button
+                        type="button"
+                        className="fixed inset-0 z-[35] cursor-default"
+                        aria-label="关闭菜单"
+                        onClick={() => setAccountOpen(false)}
+                      />
+                      <div className="absolute bottom-full left-0 z-[36] mb-2 min-w-[10rem] rounded-xl border border-black/10 bg-white/95 py-1 text-sm shadow-lg backdrop-blur">
+                        {isAdmin ? (
+                          <Link
+                            href="/admin"
+                            className="block px-3 py-2 text-gray-800 hover:bg-black/5"
+                            onClick={() => setAccountOpen(false)}
+                          >
+                            管理后台
+                          </Link>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-gray-800 hover:bg-black/5"
+                          onClick={() => signOut({ callbackUrl: "/login" })}
+                        >
+                          退出登录
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+
+                <button
+                  type="button"
+                  className={iconBtn}
+                  aria-label="区域与地图"
+                  onClick={() => setManageOpen(true)}
+                >
+                  <span className="material-symbols-outlined text-[22px] leading-none">
+                    manage_accounts
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  className={iconBtn}
+                  aria-label="今日信息"
+                  onClick={() => setShowInfo((v) => !v)}
+                >
+                  <span className="material-symbols-outlined text-[22px] leading-none">info</span>
+                </button>
+              </div>
+
+              <div className="pointer-events-auto flex flex-col gap-2 pb-1">
+                {userLocation ? (
+                  <button type="button" onClick={backToMe} className={iconBtn} aria-label="回到我的位置">
+                    <span className="material-symbols-outlined text-[22px] leading-none">
+                      location_searching
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="pointer-events-auto flex justify-center px-3 pb-[12px]">
               <button
                 type="button"
-                onClick={backToMe}
+                onClick={() => setDeliveryActive((v) => !v)}
                 className={[
-                  "rounded-xl border border-black/10 bg-white/50 px-3 py-2 text-sm text-black shadow-sm backdrop-blur"
+                  "flex items-center gap-1 rounded-[8px] px-5 py-2.5 text-sm font-medium shadow-sm",
+                  "border border-black/10",
+                  deliveryActive ? "bg-red-600 text-white" : "bg-green-600 text-white"
                 ].join(" ")}
               >
-                回到我的位置
+                <span className="material-symbols-outlined text-base leading-none">
+                  {deliveryActive ? "pause" : "play_arrow"}
+                </span>
+                {deliveryActive ? "停止投递" : "开始投递"}
               </button>
             </div>
-          ) : null}
-
-          <div className="pointer-events-auto absolute bottom-24 left-3 z-30">
-            <button
-              type="button"
-              onClick={() => setShowInfo((v) => !v)}
-              className="rounded-xl border border-black/10 bg-white/50 px-3 py-2 text-sm text-black shadow-sm backdrop-blur"
-            >
-              i 今日信息
-            </button>
           </div>
 
           {showInfo ? (
-            <div className="pointer-events-none absolute bottom-36 left-3 z-30 rounded-xl border border-black/10 bg-white/50 p-3 text-xs text-black shadow-sm backdrop-blur">
+            <div className="pointer-events-none absolute bottom-28 left-3 z-30 rounded-xl border border-black/10 bg-white/50 p-3 text-xs text-black shadow-sm backdrop-blur">
               <div>今天已投递：{markers.filter((m) => m.delivery_status === "delivered").length}</div>
               <div>
                 今天应投递：{markers.filter((m) => m.delivery_status !== "blocked").length}
@@ -656,31 +755,22 @@ export default function MapView({
             </div>
           ) : null}
 
-          <div className="pointer-events-auto absolute bottom-4 left-1/2 z-30 -translate-x-1/2">
-            <button
-              type="button"
-              onClick={() => setDeliveryActive((v) => !v)}
-              className={[
-                "flex items-center gap-1 rounded-[8px] px-4 py-2 text-sm shadow-sm",
-                "border border-black/10",
-                deliveryActive ? "bg-red-600 text-white" : "bg-green-600 text-white"
-              ].join(" ")}
-            >
-              <span className="material-symbols-outlined text-base leading-none">
-                {deliveryActive ? "pause" : "play_arrow"}
-              </span>
-              {deliveryActive ? "停止投递" : "开始投递"}
-            </button>
-          </div>
-
           <MarkerActionSheet
             marker={selectedMarker}
-            open={Boolean(selectedMarker)}
+            open={markerSheet === "actions" && Boolean(selectedMarker)}
             loading={statusLoading}
-            onClose={() => setSelectedMarkerId(null)}
+            onClose={closeMarkerSheets}
             onSetStatus={updateMarkerStatus}
             onRemoveFromPlan={removeFromPlan}
             onUpdateHousenumber={updateHousenumber}
+          />
+
+          <DeliveryFocusSheet
+            marker={selectedMarker}
+            open={markerSheet === "focus" && Boolean(selectedMarker)}
+            loading={focusLoading}
+            onClose={closeMarkerSheets}
+            onSetDeliveryFocus={() => void setRegionDeliveryFocus()}
           />
         </>
       )}

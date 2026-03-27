@@ -3,10 +3,11 @@
 import type { ExpressionSpecification, GeoJSONSource, Map } from "maplibre-gl"
 import type { ApartmentGroupOverlay, HouseMarkerDTO } from "./types"
 
-export const HOUSE_MARKER_BEFORE_LAYER_ID = "house-marker-icon-layer"
+/** 区域编辑多边形需叠放在门牌圆点下方 */
+export const HOUSE_MARKER_BEFORE_LAYER_ID = "house-marker-circle-layer"
 
 const SOURCE_ID = "house-marker-source"
-const ICON_LAYER_ID = "house-marker-icon-layer"
+const CIRCLE_LAYER_ID = "house-marker-circle-layer"
 const TEXT_LAYER_ID = "house-marker-text-layer"
 const CONFLICT_LINE_SOURCE_ID = "house-marker-conflict-line-source"
 const CONFLICT_LINE_LAYER_ID = "house-marker-conflict-line-layer"
@@ -14,75 +15,8 @@ const APARTMENT_SOURCE_ID = "apartment-group-source"
 const APARTMENT_BORDER_LAYER_ID = "apartment-group-border-layer"
 const APARTMENT_LABEL_LAYER_ID = "apartment-group-label-layer"
 const NEARBY_SOURCE_ID = "house-marker-nearby-source"
-const NEARBY_ICON_LAYER_ID = "house-marker-nearby-icon-layer"
+const NEARBY_CIRCLE_LAYER_ID = "house-marker-nearby-circle-layer"
 const NEARBY_TEXT_LAYER_ID = "house-marker-nearby-text-layer"
-
-const IMG_PENDING = "house-mk-pending"
-const IMG_DELIVERED = "house-mk-delivered"
-const IMG_BLOCKED = "house-mk-blocked"
-const IMG_CONFLICT = "house-mk-conflict"
-
-const imagesLoadedByMap = new WeakMap<Map, Promise<void>>()
-
-function drawRoundedRectIcon(
-  fill: string,
-  stroke: string,
-  width = 64,
-  height = 36,
-  radius = 9
-): string {
-  const canvas = document.createElement("canvas")
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return canvas.toDataURL()
-  ctx.clearRect(0, 0, width, height)
-  ctx.beginPath()
-  if (typeof ctx.roundRect === "function") {
-    ctx.roundRect(1.5, 1.5, width - 3, height - 3, radius)
-  } else {
-    ctx.rect(1.5, 1.5, width - 3, height - 3)
-  }
-  ctx.fillStyle = fill
-  ctx.fill()
-  ctx.strokeStyle = stroke
-  ctx.lineWidth = 1.5
-  ctx.stroke()
-  return canvas.toDataURL()
-}
-
-function loadDataUrlImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error("marker image load failed"))
-    img.src = url
-  })
-}
-
-export function ensureHouseMarkerImages(map: Map): Promise<void> {
-  const existing = imagesLoadedByMap.get(map)
-  if (existing) return existing
-
-  const loading = (async () => {
-    const specs: Array<[string, string, string]> = [
-      [IMG_PENDING, "#111111", "#ffffff"],
-      [IMG_DELIVERED, "#16a34a", "#ffffff"],
-      [IMG_BLOCKED, "#dc2626", "#ffffff"],
-      [IMG_CONFLICT, "#ffffff", "#dc2626"]
-    ]
-
-    for (const [id, fill, stroke] of specs) {
-      if (map.hasImage(id)) continue
-      const url = drawRoundedRectIcon(fill, stroke)
-      const img = await loadDataUrlImage(url)
-      map.addImage(id, img, { pixelRatio: 2 })
-    }
-  })()
-
-  imagesLoadedByMap.set(map, loading)
-  return loading
-}
 
 function toFeatureCollection(markers: HouseMarkerDTO[]) {
   return {
@@ -98,32 +32,16 @@ function toFeatureCollection(markers: HouseMarkerDTO[]) {
         number: m.current_housenumber,
         label: m.display_label,
         status: m.delivery_status,
-        is_conflict: m.is_conflict
+        is_conflict: m.is_conflict,
+        is_focus: m.is_delivery_focus
       }
     }))
   }
 }
 
-export async function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
-  await ensureHouseMarkerImages(map)
-
+export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
   const data = toFeatureCollection(markers)
   const source = map.getSource(SOURCE_ID) as GeoJSONSource | undefined
-
-  const iconImageExpr: ExpressionSpecification = [
-    "case",
-    ["==", ["get", "is_conflict"], true],
-    IMG_CONFLICT,
-    [
-      "match",
-      ["get", "status"],
-      "delivered",
-      IMG_DELIVERED,
-      "blocked",
-      IMG_BLOCKED,
-      IMG_PENDING
-    ]
-  ]
 
   if (!source) {
     map.addSource(SOURCE_ID, {
@@ -132,15 +50,48 @@ export async function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
     })
 
     map.addLayer({
-      id: ICON_LAYER_ID,
-      type: "symbol",
+      id: CIRCLE_LAYER_ID,
+      type: "circle",
       source: SOURCE_ID,
-      layout: {
-        "icon-image": iconImageExpr,
-        "icon-size": 1,
-        "icon-allow-overlap": true,
-        "icon-ignore-placement": true,
-        "icon-anchor": "center"
+      paint: {
+        "circle-radius": [
+          "case",
+          ["==", ["get", "is_focus"], true],
+          26,
+          ["==", ["get", "is_conflict"], true],
+          22,
+          20
+        ],
+        "circle-color": [
+          "case",
+          ["==", ["get", "is_conflict"], true],
+          "#ffffff",
+          [
+            "match",
+            ["get", "status"],
+            "delivered",
+            "#16a34a",
+            "blocked",
+            "#dc2626",
+            "#111111"
+          ]
+        ],
+        "circle-stroke-width": [
+          "case",
+          ["==", ["get", "is_conflict"], true],
+          2,
+          ["==", ["get", "is_focus"], true],
+          2.5,
+          1.5
+        ],
+        "circle-stroke-color": [
+          "case",
+          ["==", ["get", "is_conflict"], true],
+          "#dc2626",
+          ["==", ["get", "is_focus"], true],
+          "#facc15",
+          "#ffffff"
+        ]
       }
     })
 
@@ -154,20 +105,14 @@ export async function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
           ["==", ["get", "is_conflict"], true],
           ["to-string", ["get", "label"]],
           ["to-string", ["get", "number"]]
-        ],
+        ] as ExpressionSpecification,
         "text-size": 12,
         "text-anchor": "center",
         "text-allow-overlap": true,
-        "text-ignore-placement": true,
-        "text-offset": [0, 0]
+        "text-ignore-placement": true
       },
       paint: {
-        "text-color": [
-          "case",
-          ["==", ["get", "is_conflict"], true],
-          "#dc2626",
-          "#ffffff"
-        ]
+        "text-color": "#ffffff"
       }
     })
   } else {
@@ -175,102 +120,16 @@ export async function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
   }
 }
 
+/** 不再绘制公寓聚合蓝色虚线框（需求移除） */
 export function upsertApartmentGroupLayer(
   map: Map,
-  groups: ApartmentGroupOverlay[]
+  _groups: ApartmentGroupOverlay[]
 ) {
-  const pad = 0.00008
-  const polygonFeatures = groups.map((g) => ({
-    type: "Feature" as const,
-    geometry: {
-      type: "Polygon" as const,
-      coordinates: [[
-        [g.minLng - pad, g.minLat - pad],
-        [g.maxLng + pad, g.minLat - pad],
-        [g.maxLng + pad, g.maxLat + pad],
-        [g.minLng - pad, g.maxLat + pad],
-        [g.minLng - pad, g.minLat - pad]
-      ]]
-    },
-    properties: {
-      id: g.id,
-      count: g.count
-    }
-  }))
-
-  const labelFeatures = groups.map((g) => ({
-    type: "Feature" as const,
-    geometry: {
-      type: "Point" as const,
-      coordinates: [g.centerLng, g.maxLat + 0.00011]
-    },
-    properties: {
-      id: g.id,
-      text: String(g.count)
-    }
-  }))
-
-  const data = {
-    type: "FeatureCollection" as const,
-    features: polygonFeatures
-  }
-  const labelData = {
-    type: "FeatureCollection" as const,
-    features: labelFeatures
-  }
-
-  const source = map.getSource(APARTMENT_SOURCE_ID) as GeoJSONSource | undefined
-  if (!source) {
-    map.addSource(APARTMENT_SOURCE_ID, {
-      type: "geojson",
-      data
-    })
-
-    map.addLayer(
-      {
-        id: APARTMENT_BORDER_LAYER_ID,
-        type: "line",
-        source: APARTMENT_SOURCE_ID,
-        paint: {
-          "line-color": "#2563eb",
-          "line-width": 2,
-          "line-dasharray": [2, 2]
-        }
-      },
-      ICON_LAYER_ID
-    )
-  } else {
-    source.setData(data)
-  }
-
-  const labelSource = map.getSource(`${APARTMENT_SOURCE_ID}-label`) as
-    | GeoJSONSource
-    | undefined
-  if (!labelSource) {
-    map.addSource(`${APARTMENT_SOURCE_ID}-label`, {
-      type: "geojson",
-      data: labelData
-    })
-    map.addLayer(
-      {
-        id: APARTMENT_LABEL_LAYER_ID,
-        type: "symbol",
-        source: `${APARTMENT_SOURCE_ID}-label`,
-        layout: {
-          "text-field": ["to-string", ["get", "text"]],
-          "text-size": 12
-        },
-        paint: {
-          "text-color": "#2563eb",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 2
-        }
-      },
-      ICON_LAYER_ID
-    )
-  } else {
-    labelSource.setData(labelData)
-  }
+  void _groups
+  if (map.getLayer(APARTMENT_LABEL_LAYER_ID)) map.removeLayer(APARTMENT_LABEL_LAYER_ID)
+  if (map.getSource(`${APARTMENT_SOURCE_ID}-label`)) map.removeSource(`${APARTMENT_SOURCE_ID}-label`)
+  if (map.getLayer(APARTMENT_BORDER_LAYER_ID)) map.removeLayer(APARTMENT_BORDER_LAYER_ID)
+  if (map.getSource(APARTMENT_SOURCE_ID)) map.removeSource(APARTMENT_SOURCE_ID)
 }
 
 export function upsertConflictConnectionLayer(
@@ -324,18 +183,17 @@ function toNearbyFeatureCollection(markers: HouseMarkerDTO[]) {
         number: m.current_housenumber,
         label: m.display_label,
         status: m.delivery_status,
-        is_conflict: m.is_conflict
+        is_conflict: m.is_conflict,
+        is_focus: false
       }
     }))
   }
 }
 
-export async function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
-  await ensureHouseMarkerImages(map)
-
+export function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
   if (markers.length === 0) {
     if (map.getLayer(NEARBY_TEXT_LAYER_ID)) map.removeLayer(NEARBY_TEXT_LAYER_ID)
-    if (map.getLayer(NEARBY_ICON_LAYER_ID)) map.removeLayer(NEARBY_ICON_LAYER_ID)
+    if (map.getLayer(NEARBY_CIRCLE_LAYER_ID)) map.removeLayer(NEARBY_CIRCLE_LAYER_ID)
     if (map.getSource(NEARBY_SOURCE_ID)) map.removeSource(NEARBY_SOURCE_ID)
     ;(map as unknown as { _nearbyHouseMarkerClickBound?: boolean })._nearbyHouseMarkerClickBound =
       false
@@ -343,35 +201,38 @@ export async function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarke
   }
 
   const data = toNearbyFeatureCollection(markers)
-  const nearbyIconExpr: ExpressionSpecification = [
-    "case",
-    ["==", ["get", "is_conflict"], true],
-    IMG_CONFLICT,
-    [
-      "match",
-      ["get", "status"],
-      "delivered",
-      IMG_DELIVERED,
-      "blocked",
-      IMG_BLOCKED,
-      IMG_PENDING
-    ]
-  ]
-
   const source = map.getSource(NEARBY_SOURCE_ID) as GeoJSONSource | undefined
 
   if (!source) {
     map.addSource(NEARBY_SOURCE_ID, { type: "geojson", data })
     map.addLayer(
       {
-        id: NEARBY_ICON_LAYER_ID,
-        type: "symbol",
+        id: NEARBY_CIRCLE_LAYER_ID,
+        type: "circle",
         source: NEARBY_SOURCE_ID,
-        layout: {
-          "icon-image": nearbyIconExpr,
-          "icon-size": 1.25,
-          "icon-allow-overlap": true,
-          "icon-ignore-placement": true
+        paint: {
+          "circle-radius": ["case", ["==", ["get", "is_conflict"], true], 26, 24],
+          "circle-color": [
+            "case",
+            ["==", ["get", "is_conflict"], true],
+            "#ffffff",
+            [
+              "match",
+              ["get", "status"],
+              "delivered",
+              "#16a34a",
+              "blocked",
+              "#dc2626",
+              "#111111"
+            ]
+          ],
+          "circle-stroke-width": ["case", ["==", ["get", "is_conflict"], true], 2.5, 2.5],
+          "circle-stroke-color": [
+            "case",
+            ["==", ["get", "is_conflict"], true],
+            "#dc2626",
+            "#2563eb"
+          ]
         }
       },
       TEXT_LAYER_ID
@@ -387,19 +248,14 @@ export async function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarke
             ["==", ["get", "is_conflict"], true],
             ["to-string", ["get", "label"]],
             ["to-string", ["get", "number"]]
-          ],
+          ] as ExpressionSpecification,
           "text-size": 13,
           "text-anchor": "center",
           "text-allow-overlap": true,
           "text-ignore-placement": true
         },
         paint: {
-          "text-color": [
-            "case",
-            ["==", ["get", "is_conflict"], true],
-            "#dc2626",
-            "#ffffff"
-          ]
+          "text-color": "#ffffff"
         }
       },
       TEXT_LAYER_ID
@@ -415,10 +271,10 @@ export function bindHouseMarkerClick(
 ) {
   const mapAny = map as any
 
-  const layerIds = [ICON_LAYER_ID, TEXT_LAYER_ID]
+  const mainLayers = [CIRCLE_LAYER_ID, TEXT_LAYER_ID]
 
   if (!mapAny._houseMarkerClickBound) {
-    for (const layerId of layerIds) {
+    for (const layerId of mainLayers) {
       map.on("click", layerId, (event) => {
         const feature = event.features?.[0]
         const markerId = String(feature?.properties?.id ?? "")
@@ -435,8 +291,8 @@ export function bindHouseMarkerClick(
     mapAny._houseMarkerClickBound = true
   }
 
-  if (map.getLayer(NEARBY_ICON_LAYER_ID) && !mapAny._nearbyHouseMarkerClickBound) {
-    for (const layerId of [NEARBY_ICON_LAYER_ID, NEARBY_TEXT_LAYER_ID]) {
+  if (map.getLayer(NEARBY_CIRCLE_LAYER_ID) && !mapAny._nearbyHouseMarkerClickBound) {
+    for (const layerId of [NEARBY_CIRCLE_LAYER_ID, NEARBY_TEXT_LAYER_ID]) {
       if (!map.getLayer(layerId)) continue
       map.on("click", layerId, (event) => {
         const feature = event.features?.[0]
@@ -457,7 +313,7 @@ export function bindHouseMarkerClick(
 
 export function removeHouseMarkerLayer(map: Map) {
   if (map.getLayer(NEARBY_TEXT_LAYER_ID)) map.removeLayer(NEARBY_TEXT_LAYER_ID)
-  if (map.getLayer(NEARBY_ICON_LAYER_ID)) map.removeLayer(NEARBY_ICON_LAYER_ID)
+  if (map.getLayer(NEARBY_CIRCLE_LAYER_ID)) map.removeLayer(NEARBY_CIRCLE_LAYER_ID)
   if (map.getSource(NEARBY_SOURCE_ID)) map.removeSource(NEARBY_SOURCE_ID)
   if (map.getLayer(APARTMENT_LABEL_LAYER_ID)) map.removeLayer(APARTMENT_LABEL_LAYER_ID)
   if (map.getSource(`${APARTMENT_SOURCE_ID}-label`)) map.removeSource(`${APARTMENT_SOURCE_ID}-label`)
@@ -466,6 +322,6 @@ export function removeHouseMarkerLayer(map: Map) {
   if (map.getLayer(CONFLICT_LINE_LAYER_ID)) map.removeLayer(CONFLICT_LINE_LAYER_ID)
   if (map.getSource(CONFLICT_LINE_SOURCE_ID)) map.removeSource(CONFLICT_LINE_SOURCE_ID)
   if (map.getLayer(TEXT_LAYER_ID)) map.removeLayer(TEXT_LAYER_ID)
-  if (map.getLayer(ICON_LAYER_ID)) map.removeLayer(ICON_LAYER_ID)
+  if (map.getLayer(CIRCLE_LAYER_ID)) map.removeLayer(CIRCLE_LAYER_ID)
   if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID)
 }

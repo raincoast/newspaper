@@ -60,8 +60,12 @@ model Region {
   name        String
   /// 区域编辑模式框选：四个顶点 [lng,lat]（顺序：nw, ne, se, sw 或闭合前四点）
   mapBoundsRing Json?
+  /// 当前区域优先/计划投递门牌（地图上高亮）
+  deliveryFocusHouseMarkerId String? @unique
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
+
+  deliveryFocusHouse HouseMarker? @relation("RegionDeliveryFocus", fields: [deliveryFocusHouseMarkerId], references: [id], onDelete: SetNull)
 
   userAssignments UserRegionAssignment[]
   streetRules     StreetRule[]
@@ -170,6 +174,8 @@ model HouseMarker {
 
   region Region @relation(fields: [regionId], references: [id])
   streetRule StreetRule? @relation(fields: [streetRuleId], references: [id])
+
+  regionAsDeliveryFocusFor Region? @relation("RegionDeliveryFocus")
 
   @@index([regionId, street_name])
   @@index([regionId, current_housenumber])

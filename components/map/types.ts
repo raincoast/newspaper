@@ -13,6 +13,7 @@ export type HouseMarkerDTO = {
   is_manually_excluded: boolean
   is_conflict: boolean
   conflict_peer_ids: string[]
+  is_delivery_focus: boolean
   last_delivered_at: string | null
   last_delivery_update_at: string | null
 }
