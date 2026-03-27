@@ -89,37 +89,40 @@ async function main() {
 
   if (regionA) {
     await prisma.houseMarker.deleteMany({ where: { regionId: regionA.id } })
+    // Konstanz · Jacob-Burckhardt-Strasse 4 附近示例门牌
+    const jbsLat = 47.66365
+    const jbsLng = 9.17145
     await prisma.houseMarker.createMany({
       data: [
         {
           regionId: regionA.id,
-          street_name: "和平路",
-          osm_default_housenumber: "1",
-          current_housenumber: "1",
+          street_name: "Jacob-Burckhardt-Strasse",
+          osm_default_housenumber: "2",
+          current_housenumber: "2",
           delivery_status: "NOT_DELIVERED",
           building_id: "building_A_1",
-          lat: 39.9085,
-          lng: 116.3978
+          lat: jbsLat + 0.00035,
+          lng: jbsLng - 0.00025
         },
         {
           regionId: regionA.id,
-          street_name: "和平路",
-          osm_default_housenumber: "3",
-          current_housenumber: "3",
+          street_name: "Jacob-Burckhardt-Strasse",
+          osm_default_housenumber: "4",
+          current_housenumber: "4",
           delivery_status: "DELIVERED",
           building_id: "building_A_1",
-          lat: 39.9092,
-          lng: 116.3989
+          lat: jbsLat,
+          lng: jbsLng
         },
         {
           regionId: regionA.id,
-          street_name: "和平路",
-          osm_default_housenumber: "5",
-          current_housenumber: "5",
+          street_name: "Jacob-Burckhardt-Strasse",
+          osm_default_housenumber: "6",
+          current_housenumber: "6",
           delivery_status: "NO_ADVERTISE",
           building_id: "building_A_2",
-          lat: 39.9079,
-          lng: 116.3992
+          lat: jbsLat - 0.00028,
+          lng: jbsLng + 0.00022
         }
       ]
     })
@@ -127,27 +130,29 @@ async function main() {
 
   if (regionB) {
     await prisma.houseMarker.deleteMany({ where: { regionId: regionB.id } })
+    const kbLat = 47.6641
+    const kbLng = 9.1728
     await prisma.houseMarker.createMany({
       data: [
         {
           regionId: regionB.id,
-          street_name: "建设街",
-          osm_default_housenumber: "2",
-          current_housenumber: "2",
+          street_name: "Kreuzlinger Strasse",
+          osm_default_housenumber: "10",
+          current_housenumber: "10",
           delivery_status: "NOT_DELIVERED",
           building_id: "building_B_1",
-          lat: 39.9132,
-          lng: 116.4042
+          lat: kbLat,
+          lng: kbLng
         },
         {
           regionId: regionB.id,
-          street_name: "建设街",
-          osm_default_housenumber: "4",
-          current_housenumber: "4",
+          street_name: "Kreuzlinger Strasse",
+          osm_default_housenumber: "12",
+          current_housenumber: "12",
           delivery_status: "NOT_DELIVERED",
           building_id: "building_B_1",
-          lat: 39.9126,
-          lng: 116.4054
+          lat: kbLat - 0.0004,
+          lng: kbLng + 0.00035
         }
       ]
     })

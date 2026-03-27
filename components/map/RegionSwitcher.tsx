@@ -2,6 +2,9 @@
 
 import type { RegionLite } from "./types"
 
+const glass =
+  "rounded-xl border border-black/10 bg-white/50 px-3 py-2 text-black shadow-sm backdrop-blur"
+
 export default function RegionSwitcher({
   regions,
   selectedRegionId,
@@ -12,20 +15,27 @@ export default function RegionSwitcher({
   onChange: (regionId: string) => void
 }) {
   return (
-    <div className="rounded-xl border border-black/10 bg-white/80 p-2 text-black shadow-sm backdrop-blur">
-      <div className="mb-1 text-xs font-medium">区域</div>
+    <div className={glass}>
+      <label className="sr-only">区域</label>
       <select
+        aria-label="选择投递区域"
         value={selectedRegionId ?? ""}
         onChange={(e) => onChange(e.target.value)}
-        className="w-40 rounded-lg border border-black/10 bg-white px-2 py-2 text-sm"
+        className={[
+          "w-[min(200px,calc(100vw-8rem))] max-w-[220px] cursor-pointer bg-transparent text-sm font-medium",
+          "outline-none focus:ring-0"
+        ].join(" ")}
       >
-        {regions.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name}
-          </option>
-        ))}
+        {regions.length === 0 ? (
+          <option value="">暂无区域</option>
+        ) : (
+          regions.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))
+        )}
       </select>
     </div>
   )
 }
-

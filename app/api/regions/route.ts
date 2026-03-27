@@ -2,6 +2,20 @@ import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "../../../lib/prisma/client"
 
+function serializeRegion(r: {
+  id: string
+  name: string
+  mapBoundsRing: unknown
+}) {
+  return {
+    id: r.id,
+    name: r.name,
+    mapBoundsRing: (r.mapBoundsRing ?? null) as
+      | { lng: number; lat: number }[]
+      | null
+  }
+}
+
 export async function GET(request: NextRequest) {
   const token = await getToken({
     req: request,
@@ -12,19 +26,54 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const role = token.role
-  const userId = token.sub
+  const manage = request.nextUrl.searchParams.get("manage") === "1"
+  const role = token.role as string | undefined
+
+  if (manage && role === "courier") {
+    const all = await prisma.region.findMany({
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, mapBoundsRing: true }
+    })
+    const mine = await prisma.userRegionAssignment.findMany({
+      where: { userId: token.sub },
+      select: { regionId: true }
+    })
+    const set = new Set(mine.map((m) => m.regionId))
+    return NextResponse.json({
+      regions: all.map((r) => ({
+        ...serializeRegion(r),
+        assigned: set.has(r.id)
+      }))
+    })
+  }
+
+  if (manage && role === "admin") {
+    const all = await prisma.region.findMany({
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, mapBoundsRing: true }
+    })
+    return NextResponse.json({
+      regions: all.map((r) => ({
+        ...serializeRegion(r),
+        assigned: true
+      }))
+    })
+  }
 
   const regions =
     role === "admin"
-      ? await prisma.region.findMany({ orderBy: { createdAt: "desc" } })
+      ? await prisma.region.findMany({
+          orderBy: { createdAt: "desc" },
+          select: { id: true, name: true, mapBoundsRing: true }
+        })
       : await prisma.region.findMany({
-          where: { userAssignments: { some: { userId } } },
-          orderBy: { createdAt: "desc" }
+          where: { userAssignments: { some: { userId: token.sub } } },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, name: true, mapBoundsRing: true }
         })
 
   return NextResponse.json({
-    regions: regions.map((r) => ({ id: r.id, name: r.name }))
+    regions: regions.map(serializeRegion)
   })
 }
 
@@ -38,7 +87,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  if (token.role !== "admin") {
+  const role = token.role as string | undefined
+  if (role !== "admin" && role !== "courier") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
@@ -53,11 +103,18 @@ export async function POST(request: NextRequest) {
 
   const region = await prisma.region.create({ data: { name } })
 
-  // 为管理员创建“可见”的分配记录（便于后续统一逻辑）
-  await prisma.userRegionAssignment.create({
-    data: { userId: token.sub, regionId: region.id }
+  await prisma.userRegionAssignment.upsert({
+    where: {
+      userId_regionId: {
+        userId: token.sub,
+        regionId: region.id
+      }
+    },
+    create: { userId: token.sub, regionId: region.id },
+    update: {}
   })
 
-  return NextResponse.json({ region: { id: region.id, name: region.name } })
+  return NextResponse.json({
+    region: serializeRegion(region)
+  })
 }
-

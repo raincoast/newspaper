@@ -17,9 +17,13 @@ export type HouseMarkerDTO = {
   last_delivery_update_at: string | null
 }
 
+export type MapBoundsRing = { lng: number; lat: number }[]
+
 export type RegionLite = {
   id: string
   name: string
+  mapBoundsRing?: MapBoundsRing | null
+  assigned?: boolean
 }
 
 export type ApartmentGroupOverlay = {

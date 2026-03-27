@@ -8,16 +8,25 @@ export default function StatsCard({ markers }: { markers: HouseMarkerDTO[] }) {
   const blocked = markers.filter((m) => m.delivery_status === "blocked").length
   const remaining = markers.filter((m) => m.delivery_status === "pending").length
 
+  const rows: Array<{ color: string; label: string; value: number }> = [
+    { color: "bg-green-600", label: "已投递", value: delivered },
+    { color: "bg-neutral-400", label: "总计", value: totalMarked },
+    { color: "bg-black", label: "剩余", value: remaining },
+    { color: "bg-red-600", label: "禁投", value: blocked }
+  ]
+
   return (
-    <div className="rounded-xl border border-black/10 bg-white/80 p-3 text-black shadow-sm backdrop-blur">
-      <div className="text-xs font-semibold">当前区域统计</div>
-      <div className="mt-2 grid grid-cols-4 gap-2 text-center text-xs">
-        <div className="rounded-lg bg-green-600 p-2 text-white">已 {delivered}</div>
-        <div className="rounded-lg bg-gray-100 p-2">总 {totalMarked}</div>
-        <div className="rounded-lg bg-black p-2 text-white">剩 {remaining}</div>
-        <div className="rounded-lg bg-red-600 p-2 text-white">禁 {blocked}</div>
-      </div>
+    <div className="rounded-xl border border-black/10 bg-white/50 p-3 text-black shadow-sm backdrop-blur">
+      <div className="text-xs font-semibold">统计</div>
+      <ul className="mt-2 space-y-1.5 text-xs">
+        {rows.map((r) => (
+          <li key={r.label} className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${r.color}`} />
+            <span className="min-w-0 flex-1 text-gray-800">{r.label}</span>
+            <span className="tabular-nums text-gray-900">：{r.value}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
-

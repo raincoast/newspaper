@@ -58,6 +58,8 @@ model UserRegionAssignment {
 model Region {
   id          String        @id @default(cuid())
   name        String
+  /// 区域编辑模式框选：四个顶点 [lng,lat]（顺序：nw, ne, se, sw 或闭合前四点）
+  mapBoundsRing Json?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 

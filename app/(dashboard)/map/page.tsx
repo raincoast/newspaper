@@ -1,6 +1,7 @@
 import { prisma } from "../../../lib/prisma/client"
 import { requireUser } from "../../../lib/auth/guards"
 import MapView from "../../../components/map/MapView"
+import type { MapBoundsRing } from "../../../components/map/types"
 
 export default async function MapPage({
   searchParams
@@ -14,10 +15,14 @@ export default async function MapPage({
 
   const accessibleRegions =
     role === "admin"
-      ? await prisma.region.findMany({ orderBy: { createdAt: "desc" } })
+      ? await prisma.region.findMany({
+          orderBy: { createdAt: "desc" },
+          select: { id: true, name: true, mapBoundsRing: true }
+        })
       : await prisma.region.findMany({
           where: { userAssignments: { some: { userId } } },
-          orderBy: { createdAt: "desc" }
+          orderBy: { createdAt: "desc" },
+          select: { id: true, name: true, mapBoundsRing: true }
         })
 
   const selectedRegionId = (() => {
@@ -31,12 +36,16 @@ export default async function MapPage({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-600 shadow-sm backdrop-blur">
+      <div className="rounded-xl bg-white/50 px-3 py-2 text-xs text-gray-600 shadow-sm backdrop-blur">
         当前用户：{session.user.email}（{session.user.role}）
         {selectedRegion ? ` · 当前区域：${selectedRegion.name}` : " · 当前无可访问区域"}
       </div>
       <MapView
-        regions={accessibleRegions.map((r) => ({ id: r.id, name: r.name }))}
+        regions={accessibleRegions.map((r) => ({
+          id: r.id,
+          name: r.name,
+          mapBoundsRing: r.mapBoundsRing as MapBoundsRing | null
+        }))}
         initialRegionId={selectedRegionId}
       />
     </div>
