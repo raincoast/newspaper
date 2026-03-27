@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  courier
+}
+
+enum HouseStatus {
+  NOT_DELIVERED
+  DELIVERED
+  NO_ADVERTISE
+}
+
+enum StreetRuleType {
+  all
+  odd
+  even
+  from_number
+  to_number
+  include_numbers
+  exclude_numbers
+}
+
+model User {
+  id          String                    @id @default(cuid())
+  name        String?
+  email       String                    @unique
+  passwordHash String
+  role        UserRole                 @default(courier)
+  is_disabled Boolean                  @default(false)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  assignments UserRegionAssignment[]
+  streetRules StreetRule[]            @relation("StreetRuleCreatedBy")
+}
+
+model UserRegionAssignment {
+  id        String   @id @default(cuid())
+  userId    String
+  regionId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  region Region @relation(fields: [regionId], references: [id])
+
+  @@unique([userId, regionId])
+  @@index([regionId])
+}
+
+model Region {
+  id          String        @id @default(cuid())
+  name        String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  userAssignments UserRegionAssignment[]
+  streetRules     StreetRule[]
+  houseMarkers    HouseMarker[]
+  conflicts       HouseNumberConflict[]
+  apartmentGroups ApartmentGroup[]
+}
+
+model StreetRule {
+  id              String   @id @default(cuid())
+  regionId        String
+  street_name    String
+  rule_type      StreetRuleType
+
+  // 数值区间/奇偶规则使用（只取 housenumber 的前导数字）
+  from_number    Int?
+  to_number      Int?
+
+  // 精确包含/排除规则使用（允许带后缀，如 12A）
+  include_numbers String[]
+  exclude_numbers String[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  createdByUserId String?
+  createdByUser   User?     @relation("StreetRuleCreatedBy", fields: [createdByUserId], references: [id])
+
+  region      Region       @relation(fields: [regionId], references: [id])
+  houseMarkers HouseMarker[]
+
+  @@unique([regionId, street_name])
+  @@index([regionId, street_name])
+}
+
+model ApartmentGroup {
+  id          String   @id @default(cuid())
+  regionId    String
+  // building_id：用于“公寓聚合/建筑聚合”
+  building_id String
+  label       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  region Region @relation(fields: [regionId], references: [id])
+  houses HouseMarker[]
+
+  @@unique([regionId, building_id])
+  @@index([regionId])
+}
+
+model HouseNumberConflict {
+  id                    String   @id @default(cuid())
+  regionId              String
+  streetName            String
+  // 冲突门牌的“current_housenumber”
+  current_housenumber  String
+  createdAt             DateTime @default(now())
+
+  houses HouseMarker[]
+
+  region Region @relation(fields: [regionId], references: [id])
+
+  @@unique([regionId, streetName, current_housenumber])
+  @@index([regionId])
+}
+
+model HouseMarker {
+  id            String   @id @default(cuid())
+  regionId      String
+  streetRuleId String?
+
+  street_name    String
+  // 必须保留：OSM 默认门牌号（后续用于对比 current_housenumber）
+  osm_default_housenumber String
+  // 可被管理员/投递员手动修正（进入后续冲突检测）
+  current_housenumber     String
+  is_number_overridden    Boolean @default(false)
+
+  // 投递状态
+  delivery_status HouseStatus @default(NOT_DELIVERED)
+  // 最近一次“已投递”日期（用于按天计算今天是否已投递）
+  last_delivered_at DateTime?
+  // 最近一次投递状态变更时间（任何状态更新都刷新）
+  last_delivery_update_at DateTime?
+  // 规则引擎选中的标记（用于地图高亮/后续生成待投递列表）
+  is_selected_by_rule Boolean @default(false)
+  // 手动添加/排除（优先级高于规则计算）
+  is_manually_added Boolean @default(false)
+  is_manually_excluded Boolean @default(false)
+
+  // 地理坐标（地图展示用）
+  lat Float
+  lng Float
+
+  // 用于公寓/建筑聚合显示
+  building_id String?
+  apartment_group_id String?
+  apartmentGroup   ApartmentGroup? @relation(fields: [apartment_group_id], references: [id])
+
+  conflictId String?
+  conflict   HouseNumberConflict? @relation(fields: [conflictId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  region Region @relation(fields: [regionId], references: [id])
+  streetRule StreetRule? @relation(fields: [streetRuleId], references: [id])
+
+  @@index([regionId, street_name])
+  @@index([regionId, current_housenumber])
+}
+

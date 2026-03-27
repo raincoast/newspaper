@@ -1,0 +1,35 @@
+export type DeliveryStatus = "pending" | "delivered" | "blocked"
+
+export type HouseMarkerDTO = {
+  id: string
+  street_name: string
+  current_housenumber: string
+  osm_default_housenumber: string
+  display_label: string
+  delivery_status: DeliveryStatus
+  lat: number
+  lng: number
+  is_selected_by_rule: boolean
+  is_manually_excluded: boolean
+  is_conflict: boolean
+  conflict_peer_ids: string[]
+  last_delivered_at: string | null
+  last_delivery_update_at: string | null
+}
+
+export type RegionLite = {
+  id: string
+  name: string
+}
+
+export type ApartmentGroupOverlay = {
+  id: string
+  count: number
+  minLat: number
+  maxLat: number
+  minLng: number
+  maxLng: number
+  centerLat: number
+  centerLng: number
+}
+
