@@ -157,6 +157,8 @@ model HouseMarker {
   // 手动添加/排除（优先级高于规则计算）
   is_manually_added Boolean @default(false)
   is_manually_excluded Boolean @default(false)
+  /// 该门牌内需跳过投递的住户姓名（非整户禁投；整户禁投仍用 NO_ADVERTISE）
+  excluded_recipient_names String[] @default([])
 
   // 地理坐标（地图展示用）
   lat Float

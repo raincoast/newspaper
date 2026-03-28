@@ -39,7 +39,12 @@ export async function GET(request: NextRequest) {
   if (manage && role === "courier") {
     const all = await prisma.region.findMany({
       orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, mapBoundsRing: true }
+      select: {
+        id: true,
+        name: true,
+        mapBoundsRing: true,
+        _count: { select: { houseMarkers: true } }
+      }
     })
     const mine = await prisma.userRegionAssignment.findMany({
       where: { userId: token.sub },
@@ -49,7 +54,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       regions: all.map((r) => ({
         ...serializeRegion(r),
-        assigned: set.has(r.id)
+        assigned: set.has(r.id),
+        houseMarkerCount: r._count.houseMarkers
       }))
     })
   }
@@ -57,12 +63,18 @@ export async function GET(request: NextRequest) {
   if (manage && role === "admin") {
     const all = await prisma.region.findMany({
       orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, mapBoundsRing: true }
+      select: {
+        id: true,
+        name: true,
+        mapBoundsRing: true,
+        _count: { select: { houseMarkers: true } }
+      }
     })
     return NextResponse.json({
       regions: all.map((r) => ({
         ...serializeRegion(r),
-        assigned: true
+        assigned: true,
+        houseMarkerCount: r._count.houseMarkers
       }))
     })
   }
@@ -108,20 +120,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name is required" }, { status: 400 })
   }
 
-  const region = await prisma.region.create({ data: { name } })
+  try {
+    const region = await prisma.region.create({ data: { name } })
 
-  await prisma.userRegionAssignment.upsert({
-    where: {
-      userId_regionId: {
-        userId: token.sub,
-        regionId: region.id
-      }
-    },
-    create: { userId: token.sub, regionId: region.id },
-    update: {}
-  })
+    await prisma.userRegionAssignment.upsert({
+      where: {
+        userId_regionId: {
+          userId: token.sub,
+          regionId: region.id
+        }
+      },
+      create: { userId: token.sub, regionId: region.id },
+      update: {}
+    })
 
-  return NextResponse.json({
-    region: serializeRegion(region)
-  })
+    return NextResponse.json({
+      region: serializeRegion(region)
+    })
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "create failed"
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }

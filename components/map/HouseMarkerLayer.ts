@@ -18,6 +18,16 @@ const NEARBY_SOURCE_ID = "house-marker-nearby-source"
 const NEARBY_CIRCLE_LAYER_ID = "house-marker-nearby-circle-layer"
 const NEARBY_TEXT_LAYER_ID = "house-marker-nearby-text-layer"
 
+function markerVisualProps(m: HouseMarkerDTO) {
+  const excluded = m.excluded_recipient_names ?? []
+  const blocked_whole = m.delivery_status === "blocked"
+  return {
+    blocked_whole,
+    partial_excl: excluded.length > 0 && !blocked_whole,
+    partial_mix: 0.55
+  }
+}
+
 function toFeatureCollection(markers: HouseMarkerDTO[]) {
   return {
     type: "FeatureCollection" as const,
@@ -34,7 +44,8 @@ function toFeatureCollection(markers: HouseMarkerDTO[]) {
         status: m.delivery_status,
         is_conflict: m.is_conflict,
         is_focus: m.is_delivery_focus,
-        rule_highlight: Boolean(m.rule_highlight)
+        rule_highlight: Boolean(m.rule_highlight),
+        ...markerVisualProps(m)
       }
     }))
   }
@@ -69,6 +80,18 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
           "case",
           ["==", ["get", "is_conflict"], true],
           "#ffffff",
+          ["==", ["get", "blocked_whole"], true],
+          "#dc2626",
+          ["==", ["get", "partial_excl"], true],
+          [
+            "interpolate",
+            ["linear"],
+            ["get", "partial_mix"],
+            0,
+            "#16a34a",
+            1,
+            "#dc2626"
+          ],
           [
             "match",
             ["get", "status"],
@@ -78,7 +101,7 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
             "#dc2626",
             "#111111"
           ]
-        ],
+        ] as ExpressionSpecification,
         "circle-stroke-width": [
           "case",
           ["==", ["get", "rule_highlight"], true],
@@ -201,7 +224,8 @@ function toNearbyFeatureCollection(markers: HouseMarkerDTO[]) {
         label: m.display_label,
         status: m.delivery_status,
         is_conflict: m.is_conflict,
-        is_focus: false
+        is_focus: false,
+        ...markerVisualProps(m)
       }
     }))
   }
@@ -233,6 +257,18 @@ export function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
             "case",
             ["==", ["get", "is_conflict"], true],
             "#ffffff",
+            ["==", ["get", "blocked_whole"], true],
+            "#dc2626",
+            ["==", ["get", "partial_excl"], true],
+            [
+              "interpolate",
+              ["linear"],
+              ["get", "partial_mix"],
+              0,
+              "#16a34a",
+              1,
+              "#dc2626"
+            ],
             [
               "match",
               ["get", "status"],
@@ -242,7 +278,7 @@ export function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
               "#dc2626",
               "#111111"
             ]
-          ],
+          ] as ExpressionSpecification,
           "circle-stroke-width": ["case", ["==", ["get", "is_conflict"], true], 2.5, 2.5],
           "circle-stroke-color": [
             "case",

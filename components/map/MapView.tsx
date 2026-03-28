@@ -17,12 +17,14 @@ import RegionSwitcher from "./RegionSwitcher"
 import StatsCard from "./StatsCard"
 import StreetRulesModal from "./StreetRulesModal"
 import {
+  bringStreetBrowseLayersToTop,
   removeStreetBrowseOverlay,
   STREET_BROWSE_CLICK_LAYERS,
   STREET_BROWSE_HIT_TOP_LAYER,
   STREET_BROWSE_SYMBOL_LAYER,
   upsertStreetBrowseOverlay
 } from "./StreetBrowseLayer"
+import { buildStreetFallbackFromMarkers, mergeStreetNameFeatures } from "../../lib/map/streetFallbackGeojson"
 import type { ApartmentGroupOverlay, DeliveryStatus, HouseMarkerDTO, MapBoundsRing, RegionLite } from "./types"
 import {
   bindHouseMarkerClick,
@@ -98,6 +100,8 @@ export default function MapView({
   const [streetBrowseError, setStreetBrowseError] = useState<string | null>(null)
   const [streetBrowseStreets, setStreetBrowseStreets] = useState<FeatureCollection | null>(null)
   const [streetBrowseNeedRingTip, setStreetBrowseNeedRingTip] = useState(false)
+  const [noDeliveryPointsTip, setNoDeliveryPointsTip] = useState(false)
+  const [resetMenuOpen, setResetMenuOpen] = useState(false)
   const [streetRulesStreet, setStreetRulesStreet] = useState<string | null>(null)
   const [rulePreviewIds, setRulePreviewIds] = useState<Set<string>>(() => new Set())
   const [editRegionId, setEditRegionId] = useState<string | null>(null)
@@ -146,6 +150,15 @@ export default function MapView({
     if (!streetRulesStreet) return []
     return markers.filter((m) => m.street_name === streetRulesStreet)
   }, [markers, streetRulesStreet])
+
+  const streetBrowseDisplayFc = useMemo(() => {
+    if (!streetBrowseStreets || !streetBrowseMode) return null
+    const region = regionsLocal.find((r) => r.id === selectedRegionId)
+    const ring = normalizeRing(region?.mapBoundsRing)
+    if (!ring) return streetBrowseStreets
+    const fb = buildStreetFallbackFromMarkers(markers, ring)
+    return mergeStreetNameFeatures(streetBrowseStreets, fb)
+  }, [streetBrowseStreets, streetBrowseMode, regionsLocal, selectedRegionId, markers])
 
   const markersForLayer = useMemo(() => {
     return markers.map((m) => ({
@@ -233,7 +246,7 @@ export default function MapView({
       container: mapContainerRef.current,
       style: {
         version: 8,
-        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+        glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
         sources: {
           osm: {
             type: "raster",
@@ -288,6 +301,9 @@ export default function MapView({
     }
     const normalized = (data.markers ?? []).map((m) => ({
       ...m,
+      excluded_recipient_names: Array.isArray(m.excluded_recipient_names)
+        ? m.excluded_recipient_names
+        : [],
       is_delivery_focus: Boolean(m.is_delivery_focus),
       is_manually_added: Boolean(m.is_manually_added),
       is_number_overridden: Boolean(m.is_number_overridden)
@@ -332,6 +348,12 @@ export default function MapView({
     const t = setTimeout(() => setStreetBrowseNeedRingTip(false), 4200)
     return () => clearTimeout(t)
   }, [streetBrowseNeedRingTip])
+
+  useEffect(() => {
+    if (!noDeliveryPointsTip) return
+    const t = setTimeout(() => setNoDeliveryPointsTip(false), 4200)
+    return () => clearTimeout(t)
+  }, [noDeliveryPointsTip])
 
   useEffect(() => {
     if (!streetBrowseMode || !mapReady || !selectedRegionId) return
@@ -382,9 +404,15 @@ export default function MapView({
     upsertStreetBrowseOverlay(map, {
       active: streetBrowseMode,
       ring: streetBrowseMode ? ring : null,
-      streets: streetBrowseStreets
+      streets: streetBrowseDisplayFc ?? streetBrowseStreets
     })
-  }, [streetBrowseMode, streetBrowseStreets, selectedRegionId, regionsLocal, mapReady])
+  }, [streetBrowseMode, streetBrowseStreets, streetBrowseDisplayFc, selectedRegionId, regionsLocal, mapReady])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map?.isStyleLoaded() || !mapReady || !streetBrowseMode) return
+    bringStreetBrowseLayersToTop(map)
+  }, [streetBrowseMode, mapReady, markersForLayer, nearbyMarkers, streetBrowseDisplayFc])
 
   useEffect(() => {
     const map = mapRef.current
@@ -597,10 +625,8 @@ export default function MapView({
     setStatusLoading(false)
     if (!res.ok) return
 
-    setMarkers((prev) =>
-      prev.map((m) => (m.id === selectedMarker.id ? { ...m, delivery_status: status } : m))
-    )
     closeMarkerSheets()
+    void loadMarkersForRegion()
   }
 
   async function removeFromPlan() {
@@ -640,6 +666,57 @@ export default function MapView({
       )
     )
     closeMarkerSheets()
+  }
+
+  async function saveExcludedRecipientNames(names: string[]) {
+    if (!selectedMarker) return
+    setStatusLoading(true)
+    const res = await fetch(`/api/house-markers/${selectedMarker.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "update_excluded_recipient_names",
+        excluded_recipient_names: names
+      })
+    })
+    setStatusLoading(false)
+    if (!res.ok) return
+    void loadMarkersForRegion()
+  }
+
+  async function deleteMarkerPermanently() {
+    if (!selectedMarker) return
+    if (!window.confirm("确定永久删除此投递点？数据库中将不再保留该门牌。")) return
+    setStatusLoading(true)
+    const res = await fetch(`/api/house-markers/${selectedMarker.id}`, { method: "DELETE" })
+    setStatusLoading(false)
+    if (!res.ok) return
+    closeMarkerSheets()
+    void loadMarkersForRegion()
+  }
+
+  async function runResetDelivery(mode: "delivery_status" | "full") {
+    if (!selectedRegionId || guestMode) return
+    if (mode === "delivery_status") {
+      if (
+        !window.confirm(
+          "将「已投递」门牌恢复为未投递，保留「不让投递」与禁投姓名等设置。确定？"
+        )
+      ) {
+        return
+      }
+    } else if (
+      !window.confirm("将重置所有门牌：清除不让投递、禁投姓名及从计划移除等。确定？")
+    ) {
+      return
+    }
+    const res = await fetch(`/api/regions/${selectedRegionId}/reset-delivery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode })
+    })
+    if (!res.ok) return
+    void loadMarkersForRegion()
   }
 
   function applyLocalDeliveryFocus(markerId: string) {
@@ -879,10 +956,31 @@ export default function MapView({
             </div>
           </div>
 
-          {nextMarker && !streetBrowseMode ? (
-            <div className="pointer-events-none absolute left-3 top-[5.5rem] z-30 rounded-xl bg-green-600 px-3 py-2 text-white shadow-sm">
-              <div className="text-[11px] opacity-90">下一个投递门牌</div>
-              <div className="text-lg font-bold">{nextMarker.marker.current_housenumber}</div>
+          {deliveryActive && nextMarker && !streetBrowseMode ? (
+            <div className="pointer-events-none absolute left-3 top-[5.5rem] z-[32] max-w-[min(92vw,280px)] rounded-xl bg-green-600 px-3 py-2.5 text-white shadow-md">
+              <div className="text-[11px] opacity-90">当前投递</div>
+              <div className="text-base font-bold leading-snug">
+                {nextMarker.marker.street_name} {nextMarker.marker.current_housenumber}.
+              </div>
+              {(nextMarker.marker.excluded_recipient_names?.length ?? 0) > 0 ? (
+                <>
+                  <hr className="my-2 border-white/40" />
+                  <div className="text-[11px] opacity-90">禁投姓名</div>
+                  <ul className="mt-1 space-y-0.5 text-sm font-medium">
+                    {nextMarker.marker.excluded_recipient_names.map((name) => (
+                      <li key={name}>· {name}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {noDeliveryPointsTip ? (
+            <div
+              className={`pointer-events-none absolute left-3 right-3 top-[5.5rem] z-[33] rounded-xl px-3 py-2 text-center text-xs text-amber-900 ${MAP_GLASS_PANEL}`}
+            >
+              当前没有投递点，请先设置。
             </div>
           ) : null}
 
@@ -932,6 +1030,59 @@ export default function MapView({
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
             <div className="flex items-end justify-between px-3 pb-2">
               <div className="pointer-events-auto flex flex-col gap-2">
+                {!guestMode ? (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      className={iconBtn}
+                      aria-label="重置投递数据"
+                      disabled={!selectedRegionId}
+                      onClick={() => {
+                        if (!selectedRegionId) return
+                        setResetMenuOpen((o) => !o)
+                      }}
+                    >
+                      <span className="material-symbols-outlined text-[22px] leading-none">
+                        reset_focus
+                      </span>
+                    </button>
+                    {resetMenuOpen ? (
+                      <>
+                        <button
+                          type="button"
+                          className="fixed inset-0 z-[34] cursor-default"
+                          aria-label="关闭菜单"
+                          onClick={() => setResetMenuOpen(false)}
+                        />
+                        <div
+                          className={`absolute bottom-full left-0 z-[36] mb-2 min-w-[11rem] rounded-xl py-1 text-sm shadow-lg ${MAP_GLASS_PANEL}`}
+                        >
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2.5 text-left text-gray-800 hover:bg-black/5"
+                            onClick={() => {
+                              setResetMenuOpen(false)
+                              void runResetDelivery("delivery_status")
+                            }}
+                          >
+                            重置投递状态
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2.5 text-left text-red-700 hover:bg-black/5"
+                            onClick={() => {
+                              setResetMenuOpen(false)
+                              void runResetDelivery("full")
+                            }}
+                          >
+                            重置所有
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {!guestMode ? (
                   <button
                     type="button"
@@ -1086,7 +1237,17 @@ export default function MapView({
             <div className="pointer-events-auto flex justify-center px-3 pb-[12px]">
               <button
                 type="button"
-                onClick={() => setDeliveryActive((v) => !v)}
+                onClick={() => {
+                  if (deliveryActive) {
+                    setDeliveryActive(false)
+                    return
+                  }
+                  if (markers.length === 0) {
+                    setNoDeliveryPointsTip(true)
+                    return
+                  }
+                  setDeliveryActive(true)
+                }}
                 className={[
                   "flex items-center gap-1 rounded-[8px] px-5 py-2.5 text-sm font-medium shadow-sm backdrop-blur",
                   "border border-black/10",
@@ -1122,6 +1283,8 @@ export default function MapView({
             onSetStatus={updateMarkerStatus}
             onRemoveFromPlan={removeFromPlan}
             onUpdateHousenumber={updateHousenumber}
+            onSaveExcludedNames={(names) => void saveExcludedRecipientNames(names)}
+            onDeleteMarker={() => void deleteMarkerPermanently()}
           />
 
           <DeliveryFocusSheet
@@ -1171,6 +1334,15 @@ export default function MapView({
         }}
         onRegionsUpdated={(next) => {
           setRegionsLocal(next)
+          setSelectedRegionId((cur) => {
+            if (cur && !next.some((r) => r.id === cur)) {
+              const fid = next[0]?.id ?? null
+              if (fid) router.push(`/map?regionId=${encodeURIComponent(fid)}`)
+              else router.push("/map")
+              return fid
+            }
+            return cur
+          })
           router.refresh()
         }}
       />

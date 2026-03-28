@@ -42,7 +42,12 @@ export async function PATCH(
     data: {
       delivery_status: toDbStatus(body.status),
       last_delivery_update_at: new Date(),
-      last_delivered_at: body.status === "delivered" ? new Date() : undefined
+      last_delivered_at:
+        body.status === "delivered"
+          ? new Date()
+          : body.status === "pending"
+            ? null
+            : undefined
     }
   })
 

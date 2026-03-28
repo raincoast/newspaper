@@ -57,6 +57,14 @@ export async function DELETE(
   }
 
   await prisma.$transaction(async (tx) => {
+    await tx.region.update({
+      where: { id: params.regionId },
+      data: { deliveryFocusHouseMarkerId: null }
+    })
+    await tx.houseMarker.deleteMany({ where: { regionId: params.regionId } })
+    await tx.streetRule.deleteMany({ where: { regionId: params.regionId } })
+    await tx.apartmentGroup.deleteMany({ where: { regionId: params.regionId } })
+    await tx.houseNumberConflict.deleteMany({ where: { regionId: params.regionId } })
     await tx.userRegionAssignment.deleteMany({ where: { regionId: params.regionId } })
     await tx.region.delete({ where: { id: params.regionId } })
   })

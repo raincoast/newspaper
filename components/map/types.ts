@@ -15,6 +15,8 @@ export type HouseMarkerDTO = {
   is_number_overridden: boolean
   is_conflict: boolean
   conflict_peer_ids: string[]
+  /** 该门牌内需跳过投递的住户姓名 */
+  excluded_recipient_names: string[]
   is_delivery_focus: boolean
   /** 客户端叠加：规则匹配高亮（预览或 is_selected_by_rule） */
   rule_highlight?: boolean
@@ -29,6 +31,7 @@ export type RegionLite = {
   name: string
   mapBoundsRing?: MapBoundsRing | null
   assigned?: boolean
+  houseMarkerCount?: number
 }
 
 export type ApartmentGroupOverlay = {

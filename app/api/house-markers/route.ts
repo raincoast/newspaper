@@ -52,6 +52,7 @@ export async function GET(request: NextRequest) {
       is_manually_excluded: true,
       is_manually_added: true,
       is_number_overridden: true,
+      excluded_recipient_names: true,
       building_id: true,
       apartment_group_id: true
     }

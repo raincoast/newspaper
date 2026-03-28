@@ -106,7 +106,7 @@ function ensureStreetLayers(map: Map) {
       "symbol-placement": "line",
       "text-field": ["get", "name"],
       "text-size": 13,
-      "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+      "text-font": ["Noto Sans Bold", "Arial Unicode MS Bold", "Noto Sans Regular"],
       "text-allow-overlap": true,
       "text-ignore-placement": true,
       "text-padding": 2
@@ -185,6 +185,20 @@ export function upsertStreetBrowseOverlay(
   }
 
   setStreetBrowseVisible(map, Boolean(opts.active && opts.ring && opts.ring.length === 4))
+  bringStreetBrowseLayersToTop(map)
+}
+
+/** 将道路标签与点击热区移到最顶层，避免被后增的门牌/附近图层盖住 */
+export function bringStreetBrowseLayersToTop(map: Map) {
+  if (!map.getLayer(STREET_BROWSE_SYMBOL_LAYER)) return
+  try {
+    map.moveLayer(STREET_BROWSE_SYMBOL_LAYER)
+    if (map.getLayer(STREET_BROWSE_HIT_TOP_LAYER)) {
+      map.moveLayer(STREET_BROWSE_HIT_TOP_LAYER)
+    }
+  } catch {
+    /* style 重建等情况下忽略 */
+  }
 }
 
 export function removeStreetBrowseOverlay(map: Map) {
