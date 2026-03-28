@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import maplibregl, { type LngLatBoundsLike, type Map } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 import Link from "next/link"
@@ -10,9 +10,12 @@ import { useRouter } from "next/navigation"
 import DeliveryFocusSheet from "./DeliveryFocusSheet"
 import DeliveryPointPickerSheet from "./DeliveryPointPickerSheet"
 import MarkerActionSheet from "./MarkerActionSheet"
+import { MAP_GLASS_PANEL } from "./mapGlass"
 import RegionManageModal from "./RegionManageModal"
 import RegionSwitcher from "./RegionSwitcher"
 import StatsCard from "./StatsCard"
+import StreetPickPanel from "./StreetPickPanel"
+import StreetRulesModal from "./StreetRulesModal"
 import type { ApartmentGroupOverlay, DeliveryStatus, HouseMarkerDTO, MapBoundsRing, RegionLite } from "./types"
 import {
   bindHouseMarkerClick,
@@ -44,9 +47,6 @@ function normalizeRing(raw: unknown): RingPoint[] | null {
   }
   return out
 }
-
-const glassPanel =
-  "rounded-xl border border-black/10 bg-white/50 shadow-sm backdrop-blur"
 
 type MarkerSheet = "none" | "focus" | "actions"
 
@@ -86,6 +86,9 @@ export default function MapView({
 
   const [manageOpen, setManageOpen] = useState(false)
   const [deliveryPickerOpen, setDeliveryPickerOpen] = useState(false)
+  const [streetPickMode, setStreetPickMode] = useState(false)
+  const [streetRulesStreet, setStreetRulesStreet] = useState<string | null>(null)
+  const [rulePreviewIds, setRulePreviewIds] = useState<Set<string>>(() => new Set())
   const [editRegionId, setEditRegionId] = useState<string | null>(null)
   const [searchQ, setSearchQ] = useState("")
   const [searchHits, setSearchHits] = useState<
@@ -97,6 +100,7 @@ export default function MapView({
   const geoWatchIdRef = useRef<number | null>(null)
 
   const editModeRef = useRef<string | null>(null)
+  const streetPickModeRef = useRef(false)
   const deliveryActiveRef = useRef(false)
   const regionsRef = useRef(regionsLocal)
   regionsRef.current = regionsLocal
@@ -118,10 +122,39 @@ export default function MapView({
     deliveryActiveRef.current = deliveryActive
   }, [deliveryActive])
 
+  useEffect(() => {
+    streetPickModeRef.current = streetPickMode
+  }, [streetPickMode])
+
   const selectedMarker = useMemo(
     () => markers.find((m) => m.id === selectedMarkerId) ?? null,
     [markers, selectedMarkerId]
   )
+
+  const streetNames = useMemo(() => {
+    const s = new Set<string>()
+    for (const m of markers) {
+      if (m.street_name) s.add(m.street_name)
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b))
+  }, [markers])
+
+  const markersOnStreet = useMemo(() => {
+    if (!streetRulesStreet) return []
+    return markers.filter((m) => m.street_name === streetRulesStreet)
+  }, [markers, streetRulesStreet])
+
+  const markersForLayer = useMemo(() => {
+    return markers.map((m) => ({
+      ...m,
+      rule_highlight: Boolean(
+        m.is_selected_by_rule ||
+          (streetRulesStreet &&
+            m.street_name === streetRulesStreet &&
+            rulePreviewIds.has(m.id))
+      )
+    }))
+  }, [markers, streetRulesStreet, rulePreviewIds])
 
   const nearbyMarkers = useMemo(() => {
     if (!userLocation) return [] as HouseMarkerDTO[]
@@ -236,48 +269,51 @@ export default function MapView({
     }
   }, [])
 
-  useEffect(() => {
-    async function loadMarkers() {
-      if (!selectedRegionId) {
-        setMarkers([])
-        setApartmentGroups([])
-        return
-      }
-      const res = await fetch(`/api/house-markers?regionId=${encodeURIComponent(selectedRegionId)}`)
-      if (!res.ok) return
-      const data = (await res.json()) as {
-        markers: HouseMarkerDTO[]
-        apartment_groups: ApartmentGroupOverlay[]
-      }
-      const normalized = (data.markers ?? []).map((m) => ({
-        ...m,
-        is_delivery_focus: Boolean(m.is_delivery_focus)
-      }))
-      let merged = normalized
-      if (guestMode && selectedRegionId && typeof window !== "undefined") {
-        const stored = sessionStorage.getItem(`guest-delivery-focus:${selectedRegionId}`)
-        if (stored) {
-          merged = normalized.map((m) => ({
-            ...m,
-            is_delivery_focus: m.id === stored
-          }))
-        }
-      }
-      setMarkers(merged)
-      setApartmentGroups(data.apartment_groups ?? [])
+  const loadMarkersForRegion = useCallback(async () => {
+    if (!selectedRegionId) {
+      setMarkers([])
+      setApartmentGroups([])
+      return
     }
-    loadMarkers()
+    const res = await fetch(`/api/house-markers?regionId=${encodeURIComponent(selectedRegionId)}`)
+    if (!res.ok) return
+    const data = (await res.json()) as {
+      markers: HouseMarkerDTO[]
+      apartment_groups: ApartmentGroupOverlay[]
+    }
+    const normalized = (data.markers ?? []).map((m) => ({
+      ...m,
+      is_delivery_focus: Boolean(m.is_delivery_focus),
+      is_manually_added: Boolean(m.is_manually_added),
+      is_number_overridden: Boolean(m.is_number_overridden)
+    }))
+    let merged = normalized
+    if (guestMode && selectedRegionId && typeof window !== "undefined") {
+      const stored = sessionStorage.getItem(`guest-delivery-focus:${selectedRegionId}`)
+      if (stored) {
+        merged = normalized.map((m) => ({
+          ...m,
+          is_delivery_focus: m.id === stored
+        }))
+      }
+    }
+    setMarkers(merged)
+    setApartmentGroups(data.apartment_groups ?? [])
   }, [selectedRegionId, guestMode])
+
+  useEffect(() => {
+    void loadMarkersForRegion()
+  }, [loadMarkersForRegion])
 
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded() || !mapReady) return
     bindHouseMarkerClick(map, (markerId) => {
-      if (editModeRef.current) return
+      if (editModeRef.current || streetPickModeRef.current) return
       setSelectedMarkerId(markerId)
       setMarkerSheet(deliveryActiveRef.current ? "actions" : "focus")
     })
-  }, [mapReady, markers, nearbyMarkers, userLocation])
+  }, [mapReady, markers, nearbyMarkers, userLocation, streetPickMode])
 
   const fitKey = useMemo(() => {
     const r = regionsLocal.find((x) => x.id === selectedRegionId)
@@ -327,8 +363,8 @@ export default function MapView({
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
-    upsertHouseMarkerLayer(map, markers)
-  }, [markers])
+    upsertHouseMarkerLayer(map, markersForLayer)
+  }, [markersForLayer])
 
   useEffect(() => {
     const map = mapRef.current
@@ -722,7 +758,7 @@ export default function MapView({
             </div>
           </div>
 
-          {nextMarker ? (
+          {nextMarker && !streetPickMode ? (
             <div className="pointer-events-none absolute left-3 top-[5.5rem] z-30 rounded-xl bg-green-600 px-3 py-2 text-white shadow-sm">
               <div className="text-[11px] opacity-90">下一个投递门牌</div>
               <div className="text-lg font-bold">{nextMarker.marker.current_housenumber}</div>
@@ -731,20 +767,51 @@ export default function MapView({
 
           {geoError ? (
             <div
-              className={`pointer-events-none absolute left-3 right-3 top-[5.5rem] z-30 rounded-xl p-2 text-xs text-red-600 shadow-sm backdrop-blur ${glassPanel}`}
+              className={`pointer-events-none absolute left-3 right-3 top-[5.5rem] z-30 rounded-xl p-2 text-xs text-red-600 ${MAP_GLASS_PANEL}`}
             >
               {geoError}
             </div>
           ) : null}
 
+          {streetPickMode && !guestMode && !streetRulesStreet ? (
+            <StreetPickPanel
+              streets={streetNames}
+              onPickStreet={(name) => setStreetRulesStreet(name)}
+              onDone={() => {
+                setStreetPickMode(false)
+                setRulePreviewIds(new Set())
+              }}
+            />
+          ) : null}
+
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
             <div className="flex items-end justify-between px-3 pb-2">
               <div className="pointer-events-auto flex flex-col gap-2">
+                {!guestMode ? (
+                  <button
+                    type="button"
+                    className={iconBtn}
+                    aria-label="快速编辑区域范围"
+                    disabled={!selectedRegionId}
+                    onClick={() => {
+                      if (!selectedRegionId) return
+                      setEditRegionId(selectedRegionId)
+                    }}
+                  >
+                    <span className="material-symbols-outlined text-[22px] leading-none">
+                      edit_square
+                    </span>
+                  </button>
+                ) : null}
+
                 <button
                   type="button"
                   className={iconBtn}
-                  aria-label="设置投递点"
-                  onClick={() => setDeliveryPickerOpen(true)}
+                  aria-label={guestMode ? "设置投递点" : "街道规则与投递点"}
+                  onClick={() => {
+                    if (guestMode) setDeliveryPickerOpen(true)
+                    else setStreetPickMode(true)
+                  }}
                 >
                   <span className="material-symbols-outlined text-[22px] leading-none">
                     add_location
@@ -770,7 +837,9 @@ export default function MapView({
                         aria-label="关闭菜单"
                         onClick={() => setAccountOpen(false)}
                       />
-                      <div className="absolute bottom-full left-0 z-[36] mb-2 min-w-[10rem] rounded-xl border border-black/10 bg-white/95 py-1 text-sm shadow-lg backdrop-blur">
+                      <div
+                        className={`absolute bottom-full left-0 z-[36] mb-2 min-w-[10rem] py-1 text-sm shadow-lg ${MAP_GLASS_PANEL} rounded-xl`}
+                      >
                         {guestMode ? (
                           <>
                             <Link
@@ -856,9 +925,11 @@ export default function MapView({
                 type="button"
                 onClick={() => setDeliveryActive((v) => !v)}
                 className={[
-                  "flex items-center gap-1 rounded-[8px] px-5 py-2.5 text-sm font-medium shadow-sm",
+                  "flex items-center gap-1 rounded-[8px] px-5 py-2.5 text-sm font-medium shadow-sm backdrop-blur",
                   "border border-black/10",
-                  deliveryActive ? "bg-red-600 text-white" : "bg-green-600 text-white"
+                  deliveryActive
+                    ? "bg-red-600/50 text-white"
+                    : "bg-green-600/50 text-white"
                 ].join(" ")}
               >
                 <span className="material-symbols-outlined text-base leading-none">
@@ -870,7 +941,9 @@ export default function MapView({
           </div>
 
           {showInfo ? (
-            <div className="pointer-events-none absolute bottom-28 left-3 z-30 rounded-xl border border-black/10 bg-white/50 p-3 text-xs text-black shadow-sm backdrop-blur">
+            <div
+              className={`pointer-events-none absolute bottom-28 left-3 z-30 rounded-xl p-3 text-xs ${MAP_GLASS_PANEL}`}
+            >
               <div>今天已投递：{markers.filter((m) => m.delivery_status === "delivered").length}</div>
               <div>
                 今天应投递：{markers.filter((m) => m.delivery_status !== "blocked").length}
@@ -903,6 +976,26 @@ export default function MapView({
             loading={focusLoading}
             onPick={(id) => void pickDeliveryFocusFromList(id)}
           />
+
+          {streetRulesStreet && selectedRegionId && !guestMode ? (
+            <StreetRulesModal
+              open={Boolean(streetRulesStreet)}
+              regionId={selectedRegionId}
+              streetName={streetRulesStreet}
+              markersOnStreet={markersOnStreet}
+              onClose={() => {
+                setStreetRulesStreet(null)
+                setRulePreviewIds(new Set())
+              }}
+              onSaved={() => {
+                void loadMarkersForRegion()
+                setStreetPickMode(false)
+                setStreetRulesStreet(null)
+                setRulePreviewIds(new Set())
+              }}
+              onPreviewMatchesChange={setRulePreviewIds}
+            />
+          ) : null}
         </>
       )}
 

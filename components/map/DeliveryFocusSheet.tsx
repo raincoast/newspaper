@@ -1,5 +1,6 @@
 "use client"
 
+import { MAP_GLASS_BOTTOM_SHEET } from "./mapGlass"
 import type { HouseMarkerDTO } from "./types"
 
 export default function DeliveryFocusSheet({
@@ -20,7 +21,7 @@ export default function DeliveryFocusSheet({
   return (
     <div className="pointer-events-none absolute inset-0 z-40">
       <div className="pointer-events-auto absolute inset-0 bg-black/20" onClick={onClose} />
-      <div className="pointer-events-auto absolute bottom-0 left-0 right-0 rounded-t-3xl border-t border-black/10 bg-white/50 p-4 text-black backdrop-blur">
+      <div className={`pointer-events-auto absolute bottom-0 left-0 right-0 p-4 ${MAP_GLASS_BOTTOM_SHEET}`}>
         <div className="mb-3">
           <div className="text-base font-semibold">
             {marker.street_name} {marker.current_housenumber}

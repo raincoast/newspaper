@@ -1,5 +1,6 @@
 "use client"
 
+import { MAP_GLASS_PANEL } from "./mapGlass"
 import type { HouseMarkerDTO } from "./types"
 
 export default function StatsCard({ markers }: { markers: HouseMarkerDTO[] }) {
@@ -16,7 +17,7 @@ export default function StatsCard({ markers }: { markers: HouseMarkerDTO[] }) {
   ]
 
   return (
-    <div className="rounded-xl border border-black/10 bg-white/50 p-3 text-black shadow-sm backdrop-blur">
+    <div className={`rounded-xl p-3 ${MAP_GLASS_PANEL}`}>
       <div className="text-xs font-semibold">统计</div>
       <ul className="mt-2 space-y-1.5 text-xs">
         {rows.map((r) => (

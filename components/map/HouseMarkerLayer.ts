@@ -33,7 +33,8 @@ function toFeatureCollection(markers: HouseMarkerDTO[]) {
         label: m.display_label,
         status: m.delivery_status,
         is_conflict: m.is_conflict,
-        is_focus: m.is_delivery_focus
+        is_focus: m.is_delivery_focus,
+        rule_highlight: Boolean(m.rule_highlight)
       }
     }))
   }
@@ -56,11 +57,13 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
       paint: {
         "circle-radius": [
           "case",
+          ["==", ["get", "rule_highlight"], true],
+          20,
           ["==", ["get", "is_focus"], true],
-          30,
+          22,
           ["==", ["get", "is_conflict"], true],
-          26,
-          24
+          19,
+          17
         ],
         "circle-color": [
           "case",
@@ -78,6 +81,8 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
         ],
         "circle-stroke-width": [
           "case",
+          ["==", ["get", "rule_highlight"], true],
+          2.5,
           ["==", ["get", "is_conflict"], true],
           2,
           ["==", ["get", "is_focus"], true],
@@ -86,6 +91,8 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
         ],
         "circle-stroke-color": [
           "case",
+          ["==", ["get", "rule_highlight"], true],
+          "#2563eb",
           ["==", ["get", "is_conflict"], true],
           "#dc2626",
           ["==", ["get", "is_focus"], true],
@@ -106,13 +113,23 @@ export function upsertHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]) {
           ["to-string", ["get", "label"]],
           ["to-string", ["get", "number"]]
         ] as ExpressionSpecification,
-        "text-size": 13,
+        "text-size": [
+          "case",
+          ["==", ["get", "rule_highlight"], true],
+          17,
+          12
+        ],
         "text-anchor": "center",
         "text-allow-overlap": true,
         "text-ignore-placement": true
       },
       paint: {
-        "text-color": "#ffffff"
+        "text-color": [
+          "case",
+          ["==", ["get", "rule_highlight"], true],
+          "#1d4ed8",
+          "#ffffff"
+        ]
       }
     })
   } else {
@@ -211,7 +228,7 @@ export function upsertNearbyHouseMarkerLayer(map: Map, markers: HouseMarkerDTO[]
         type: "circle",
         source: NEARBY_SOURCE_ID,
         paint: {
-          "circle-radius": ["case", ["==", ["get", "is_conflict"], true], 26, 24],
+          "circle-radius": ["case", ["==", ["get", "is_conflict"], true], 18, 16],
           "circle-color": [
             "case",
             ["==", ["get", "is_conflict"], true],

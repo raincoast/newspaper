@@ -1,7 +1,8 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
-import { canCourierAccessRegion } from "../../../../lib/api/regionAccess"
+import { isDeliveryStaff } from "../../../../lib/api/deliveryStaff"
 import { prisma } from "../../../../lib/prisma/client"
+import { recomputeStreetRuleSelectionForStreet } from "../../../../lib/rules-engine/recomputeStreetSelection"
 
 import type { StreetRuleType } from "../../../../lib/rules-engine/streetRuleEngine"
 
@@ -50,9 +51,8 @@ export async function PUT(
   })
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  if (token.role !== "admin") {
-    const ok = await canCourierAccessRegion(token.sub, existing.regionId)
-    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const nextStreetName = body.street_name?.trim() || existing.street_name
@@ -72,36 +72,31 @@ export async function PUT(
       ? existing.exclude_numbers
       : normalizeStringArray(body.exclude_numbers)
 
-  try {
-    const updated = await prisma.streetRule.update({
-      where: { id: params.streetRuleId },
-      data: {
-        street_name: nextStreetName,
-        rule_type: nextRuleType,
-        from_number: nextFromNumber,
-        to_number: nextToNumber,
-        include_numbers: nextIncludeNumbers,
-        exclude_numbers: nextExcludeNumbers
-      }
-    })
-
-    return NextResponse.json({
-      rule: {
-        id: updated.id,
-        regionId: updated.regionId,
-        street_name: updated.street_name,
-        rule_type: updated.rule_type
-      }
-    })
-  } catch (e: any) {
-    if (e?.code === "P2002") {
-      return NextResponse.json(
-        { error: "Street rule already exists for this region/street" },
-        { status: 409 }
-      )
+  const updated = await prisma.streetRule.update({
+    where: { id: params.streetRuleId },
+    data: {
+      street_name: nextStreetName,
+      rule_type: nextRuleType,
+      from_number: nextFromNumber,
+      to_number: nextToNumber,
+      include_numbers: nextIncludeNumbers,
+      exclude_numbers: nextExcludeNumbers
     }
-    return NextResponse.json({ error: "Failed to update street rule" }, { status: 500 })
+  })
+
+  if (updated.street_name !== existing.street_name) {
+    await recomputeStreetRuleSelectionForStreet(updated.regionId, existing.street_name)
   }
+  await recomputeStreetRuleSelectionForStreet(updated.regionId, updated.street_name)
+
+  return NextResponse.json({
+    rule: {
+      id: updated.id,
+      regionId: updated.regionId,
+      street_name: updated.street_name,
+      rule_type: updated.rule_type
+    }
+  })
 }
 
 export async function DELETE(
@@ -113,15 +108,13 @@ export async function DELETE(
 
   const rule = await prisma.streetRule.findUnique({
     where: { id: params.streetRuleId },
-    select: { regionId: true }
+    select: { regionId: true, street_name: true }
   })
   if (!rule) return NextResponse.json({ error: "Not found" }, { status: 404 })
-  if (token.role !== "admin") {
-    const ok = await canCourierAccessRegion(token.sub, rule.regionId)
-    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
-  // 删除规则前，先解除 HouseMarker.streetRuleId 引用，避免关系限制
   await prisma.$transaction(async (tx) => {
     await tx.houseMarker.updateMany({
       where: { streetRuleId: params.streetRuleId },
@@ -129,6 +122,8 @@ export async function DELETE(
     })
     await tx.streetRule.delete({ where: { id: params.streetRuleId } })
   })
+
+  await recomputeStreetRuleSelectionForStreet(rule.regionId, rule.street_name)
 
   return NextResponse.json({ ok: true })
 }

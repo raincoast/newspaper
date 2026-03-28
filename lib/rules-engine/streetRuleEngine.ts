@@ -81,6 +81,56 @@ function matchesExclude(rule: StreetRuleLike, houseValue: string) {
   })
 }
 
+function inNumericRange(houseN: number, rule: StreetRuleLike): boolean {
+  if (rule.fromNumber != null && houseN < rule.fromNumber) return false
+  if (rule.toNumber != null && houseN > rule.toNumber) return false
+  return true
+}
+
+/** 单条规则核心逻辑（不含手动添加/排除） */
+export function evaluateStreetRuleCore(rule: StreetRuleLike, house: HouseMarkerLike): boolean {
+  const houseValue = effectiveHouseNumber(house)
+  const houseN = parseLeadingInteger(houseValue)
+
+  switch (rule.ruleType) {
+    case "all": {
+      const hasBounds = rule.fromNumber != null || rule.toNumber != null
+      if (!hasBounds) return true
+      return houseN !== null && inNumericRange(houseN, rule)
+    }
+    case "odd": {
+      if (houseN === null) return false
+      const hasBounds = rule.fromNumber != null || rule.toNumber != null
+      if (hasBounds && !inNumericRange(houseN, rule)) return false
+      return houseN % 2 === 1
+    }
+    case "even": {
+      if (houseN === null) return false
+      const hasBounds = rule.fromNumber != null || rule.toNumber != null
+      if (hasBounds && !inNumericRange(houseN, rule)) return false
+      return houseN % 2 === 0
+    }
+    case "from_number":
+      if (houseN === null || rule.fromNumber == null) return false
+      if (houseN < rule.fromNumber) return false
+      if (rule.toNumber != null && houseN > rule.toNumber) return false
+      return true
+    case "to_number":
+      if (houseN === null || rule.toNumber == null) return false
+      if (houseN > rule.toNumber) return false
+      if (rule.fromNumber != null && houseN < rule.fromNumber) return false
+      return true
+    case "include_numbers":
+      return matchesInclude(rule, houseValue)
+    case "exclude_numbers":
+      return !matchesExclude(rule, houseValue)
+    default: {
+      const _exhaustive: never = rule.ruleType
+      return _exhaustive
+    }
+  }
+}
+
 export function evaluateStreetRuleSelection({
   rule,
   house
@@ -88,44 +138,17 @@ export function evaluateStreetRuleSelection({
   rule: StreetRuleLike
   house: HouseMarkerLike
 }) {
-  // 手动优先级：排除 > 规则 > 手动添加
   if (house.isManuallyExcluded) return false
   if (house.isManuallyAdded) return true
+  return evaluateStreetRuleCore(rule, house)
+}
 
-  const houseValue = effectiveHouseNumber(house)
-  const houseN = parseLeadingInteger(houseValue)
-
-  switch (rule.ruleType) {
-    case "all":
-      return true
-    case "odd":
-      return houseN !== null && houseN % 2 === 1
-    case "even":
-      return houseN !== null && houseN % 2 === 0
-    case "from_number":
-      return (
-        houseN !== null &&
-        rule.fromNumber !== null &&
-        rule.fromNumber !== undefined &&
-        houseN >= rule.fromNumber
-      )
-    case "to_number":
-      return (
-        houseN !== null &&
-        rule.toNumber !== null &&
-        rule.toNumber !== undefined &&
-        houseN <= rule.toNumber
-      )
-    case "include_numbers":
-      return matchesInclude(rule, houseValue)
-    case "exclude_numbers":
-      return !matchesExclude(rule, houseValue)
-    default: {
-      // Exhaustiveness check
-      const _exhaustive: never = rule.ruleType
-      return _exhaustive
-    }
-  }
+/** 同一条街多条规则取并集（OR）；无规则时无人被选中 */
+export function evaluateStreetRulesUnion(rules: StreetRuleLike[], house: HouseMarkerLike): boolean {
+  if (house.isManuallyExcluded) return false
+  if (house.isManuallyAdded) return true
+  if (rules.length === 0) return false
+  return rules.some((r) => evaluateStreetRuleCore(r, house))
 }
 
 export function toStreetRuleLikeFromPrisma(rule: {

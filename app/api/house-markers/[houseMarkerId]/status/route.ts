@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { isDeliveryStaff } from "../../../../../lib/api/deliveryStaff"
 import { prisma } from "../../../../../lib/prisma/client"
 
 type ClientStatus = "pending" | "delivered" | "blocked"
@@ -32,16 +33,8 @@ export async function PATCH(
   })
   if (!marker) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  if (token.role !== "admin") {
-    const assignment = await prisma.userRegionAssignment.findUnique({
-      where: {
-        userId_regionId: {
-          userId: token.sub,
-          regionId: marker.regionId
-        }
-      }
-    })
-    if (!assignment) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   await prisma.houseMarker.update({

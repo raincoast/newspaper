@@ -1,5 +1,6 @@
 "use client"
 
+import { MAP_GLASS_BOTTOM_SHEET } from "./mapGlass"
 import type { HouseMarkerDTO } from "./types"
 
 export default function DeliveryPointPickerSheet({
@@ -25,7 +26,9 @@ export default function DeliveryPointPickerSheet({
         aria-label="关闭"
         onClick={onClose}
       />
-      <div className="fixed bottom-0 left-0 right-0 z-[46] max-h-[55vh] overflow-hidden rounded-t-2xl border border-black/10 bg-white/95 shadow-lg backdrop-blur">
+      <div
+        className={`fixed bottom-0 left-0 right-0 z-[46] max-h-[55vh] overflow-hidden rounded-t-2xl shadow-lg ${MAP_GLASS_BOTTOM_SHEET}`}
+      >
         <div className="border-b border-black/10 px-4 py-3 text-sm font-medium text-gray-900">
           选择当前区域的投递点
         </div>

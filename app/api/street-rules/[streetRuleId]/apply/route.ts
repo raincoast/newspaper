@@ -1,13 +1,8 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
-import { canCourierAccessRegion } from "../../../../../lib/api/regionAccess"
+import { isDeliveryStaff } from "../../../../../lib/api/deliveryStaff"
 import { prisma } from "../../../../../lib/prisma/client"
-
-import {
-  evaluateStreetRuleSelection,
-  toHouseMarkerLikeFromPrisma,
-  toStreetRuleLikeFromPrisma
-} from "../../../../../lib/rules-engine/streetRuleEngine"
+import { recomputeStreetRuleSelectionForStreet } from "../../../../../lib/rules-engine/recomputeStreetSelection"
 
 export async function POST(
   request: NextRequest,
@@ -21,54 +16,22 @@ export async function POST(
     select: {
       id: true,
       regionId: true,
-      street_name: true,
-      rule_type: true,
-      from_number: true,
-      to_number: true,
-      include_numbers: true,
-      exclude_numbers: true
+      street_name: true
     }
   })
 
   if (!rule) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  if (token.role !== "admin") {
-    const ok = await canCourierAccessRegion(token.sub, rule.regionId)
-    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
+  await recomputeStreetRuleSelectionForStreet(rule.regionId, rule.street_name)
+
   const houses = await prisma.houseMarker.findMany({
-    where: {
-      regionId: rule.regionId,
-      street_name: rule.street_name
-    },
-    select: {
-      id: true,
-      osm_default_housenumber: true,
-      current_housenumber: true,
-      is_number_overridden: true,
-      is_manually_added: true,
-      is_manually_excluded: true
-    }
+    where: { regionId: rule.regionId, street_name: rule.street_name },
+    select: { id: true, is_selected_by_rule: true }
   })
-
-  const streetRuleLike = toStreetRuleLikeFromPrisma(rule)
-
-  const selections = houses.map((h) => {
-    const houseLike = toHouseMarkerLikeFromPrisma(h)
-    const selected = evaluateStreetRuleSelection({ rule: streetRuleLike, house: houseLike })
-    return { id: h.id, selected }
-  })
-
-  const selectedCount = selections.filter((s) => s.selected).length
-  const updates = selections.map((s) =>
-    prisma.houseMarker.update({
-      where: { id: s.id },
-      data: { is_selected_by_rule: s.selected }
-    })
-  )
-
-  await prisma.$transaction(updates)
 
   return NextResponse.json({
     ok: true,
@@ -76,7 +39,6 @@ export async function POST(
     street_name: rule.street_name,
     regionId: rule.regionId,
     totalHouses: houses.length,
-    selectedCount
+    selectedCount: houses.filter((h) => h.is_selected_by_rule).length
   })
 }
-

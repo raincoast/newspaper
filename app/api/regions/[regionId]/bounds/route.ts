@@ -1,6 +1,7 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
 import { Prisma } from "@prisma/client"
+import { isDeliveryStaff } from "../../../../../lib/api/deliveryStaff"
 import { prisma } from "../../../../../lib/prisma/client"
 
 type RingPoint = { lng: number; lat: number }
@@ -20,14 +21,6 @@ function normalizeRing(raw: unknown): RingPoint[] | null {
   return out
 }
 
-async function canWriteRegion(userId: string, role: string | undefined, regionId: string) {
-  if (role === "admin") return true
-  const assignment = await prisma.userRegionAssignment.findUnique({
-    where: { userId_regionId: { userId, regionId } }
-  })
-  return Boolean(assignment)
-}
-
 export async function PATCH(
   request: NextRequest,
   { params }: { params: { regionId: string } }
@@ -41,8 +34,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const ok = await canWriteRegion(token.sub, token.role as string | undefined, params.regionId)
-  if (!ok) {
+  if (!isDeliveryStaff(token.role as string | undefined)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 

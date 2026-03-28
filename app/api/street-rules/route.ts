@@ -1,7 +1,9 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
-import { canCourierAccessRegion, isPublicDemoRegion } from "../../../lib/api/regionAccess"
+import { isDeliveryStaff } from "../../../lib/api/deliveryStaff"
+import { isPublicDemoRegion } from "../../../lib/api/regionAccess"
 import { prisma } from "../../../lib/prisma/client"
+import { recomputeStreetRuleSelectionForStreet } from "../../../lib/rules-engine/recomputeStreetSelection"
 
 import type { StreetRuleType } from "../../../lib/rules-engine/streetRuleEngine"
 
@@ -29,13 +31,17 @@ export async function GET(request: NextRequest) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
   const { searchParams } = new URL(request.url)
   const regionId = searchParams.get("regionId") ?? undefined
+  const streetNameFilter = searchParams.get("street_name")?.trim()
 
   if (!token?.sub) {
     if (!regionId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     const pub = await isPublicDemoRegion(regionId)
     if (!pub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     const rules = await prisma.streetRule.findMany({
-      where: { regionId },
+      where: {
+        regionId,
+        ...(streetNameFilter ? { street_name: streetNameFilter } : {})
+      },
       orderBy: { createdAt: "desc" }
     })
     return NextResponse.json({
@@ -55,14 +61,19 @@ export async function GET(request: NextRequest) {
   const role = token.role
   const userId = token.sub
 
-  const where =
-    role === "admin"
+  const baseWhere =
+    role === "admin" || role === "courier"
       ? regionId
         ? { regionId }
-        : undefined
+        : {}
       : regionId
         ? { regionId, region: { userAssignments: { some: { userId } } } }
         : { region: { userAssignments: { some: { userId } } } }
+
+  const where = {
+    ...baseWhere,
+    ...(streetNameFilter ? { street_name: streetNameFilter } : {})
+  }
 
   const rules = await prisma.streetRule.findMany({
     where: where as any,
@@ -104,42 +115,36 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "regionId, street_name, rule_type are required" }, { status: 400 })
   }
 
-  if (token.role !== "admin") {
-    const ok = await canCourierAccessRegion(token.sub, body.regionId)
-    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const include_numbers = normalizeStringArray(body.include_numbers)
   const exclude_numbers = normalizeStringArray(body.exclude_numbers)
 
-  try {
-    const rule = await prisma.streetRule.create({
-      data: {
-        regionId: body.regionId,
-        street_name: body.street_name.trim(),
-        rule_type: body.rule_type,
-        from_number: typeof body.from_number === "number" ? body.from_number : null,
-        to_number: typeof body.to_number === "number" ? body.to_number : null,
-        include_numbers,
-        exclude_numbers,
-        createdByUserId: token.sub
-      }
-    })
-
-    return NextResponse.json({
-      rule: {
-        id: rule.id,
-        regionId: rule.regionId,
-        street_name: rule.street_name,
-        rule_type: rule.rule_type
-      }
-    })
-  } catch (e: any) {
-    // P2002 = unique constraint violation
-    if (e?.code === "P2002") {
-      return NextResponse.json({ error: "Street rule already exists for this region/street" }, { status: 409 })
+  const streetName = body.street_name.trim()
+  const rule = await prisma.streetRule.create({
+    data: {
+      regionId: body.regionId,
+      street_name: streetName,
+      rule_type: body.rule_type,
+      from_number: typeof body.from_number === "number" ? body.from_number : null,
+      to_number: typeof body.to_number === "number" ? body.to_number : null,
+      include_numbers,
+      exclude_numbers,
+      createdByUserId: token.sub
     }
-    return NextResponse.json({ error: "Failed to create street rule" }, { status: 500 })
-  }
+  })
+
+  await recomputeStreetRuleSelectionForStreet(rule.regionId, rule.street_name)
+
+  return NextResponse.json({
+    rule: {
+      id: rule.id,
+      regionId: rule.regionId,
+      street_name: rule.street_name,
+      rule_type: rule.rule_type
+    }
+  })
 }
 

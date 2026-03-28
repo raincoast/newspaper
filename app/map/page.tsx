@@ -13,7 +13,7 @@ export default async function MapPage({
   const user = session?.user
 
   const accessibleRegions = user
-    ? user.role === "admin"
+    ? user.role === "admin" || user.role === "courier"
       ? await prisma.region.findMany({
           orderBy: { createdAt: "desc" },
           select: { id: true, name: true, mapBoundsRing: true }

@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
   }
 
   const regions =
-    role === "admin"
+    role === "admin" || role === "courier"
       ? await prisma.region.findMany({
           orderBy: { createdAt: "desc" },
           select: { id: true, name: true, mapBoundsRing: true }

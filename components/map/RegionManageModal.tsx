@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { MAP_GLASS_PANEL } from "./mapGlass"
 import type { MapBoundsRing, RegionLite } from "./types"
 
 type ManageRow = RegionLite & { assigned: boolean }
@@ -122,7 +123,9 @@ export default function RegionManageModal({
         className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
         onClick={onClose}
       />
-      <div className="relative z-10 max-h-[70vh] w-full max-w-sm overflow-hidden rounded-t-2xl border border-black/10 bg-white/95 shadow-xl backdrop-blur sm:rounded-2xl">
+      <div
+        className={`relative z-10 max-h-[70vh] w-full max-w-sm overflow-hidden rounded-t-2xl shadow-xl sm:rounded-2xl ${MAP_GLASS_PANEL}`}
+      >
         <div className="border-b border-black/10 px-4 py-3 text-sm font-semibold text-gray-900">
           区域
         </div>

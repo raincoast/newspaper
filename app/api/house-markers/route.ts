@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { isDeliveryStaff } from "../../../lib/api/deliveryStaff"
 import { isPublicDemoRegion } from "../../../lib/api/regionAccess"
 import { prisma } from "../../../lib/prisma/client"
 
@@ -21,14 +22,8 @@ export async function GET(request: NextRequest) {
   if (!token?.sub) {
     const pub = await isPublicDemoRegion(regionId)
     if (!pub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  } else if (token.role !== "admin") {
-    const assignment = await prisma.userRegionAssignment.findUnique({
-      where: { userId_regionId: { userId: token.sub, regionId } }
-    })
-    const pub = await isPublicDemoRegion(regionId)
-    if (!assignment && !pub) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+  } else if (!isDeliveryStaff(token.role as string | undefined)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const regionRow = await prisma.region.findUnique({
@@ -55,6 +50,8 @@ export async function GET(request: NextRequest) {
       lng: true,
       is_selected_by_rule: true,
       is_manually_excluded: true,
+      is_manually_added: true,
+      is_number_overridden: true,
       building_id: true,
       apartment_group_id: true
     }

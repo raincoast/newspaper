@@ -1,9 +1,7 @@
 "use client"
 
+import { MAP_GLASS_PANEL } from "./mapGlass"
 import type { RegionLite } from "./types"
-
-const glass =
-  "rounded-xl border border-black/10 bg-white/50 px-3 py-2 text-black shadow-sm backdrop-blur"
 
 export default function RegionSwitcher({
   regions,
@@ -15,7 +13,7 @@ export default function RegionSwitcher({
   onChange: (regionId: string) => void
 }) {
   return (
-    <div className={glass}>
+    <div className={`rounded-xl px-3 py-2 ${MAP_GLASS_PANEL}`}>
       <label className="sr-only">区域</label>
       <select
         aria-label="选择投递区域"

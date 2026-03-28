@@ -99,7 +99,6 @@ model StreetRule {
   region      Region       @relation(fields: [regionId], references: [id])
   houseMarkers HouseMarker[]
 
-  @@unique([regionId, street_name])
   @@index([regionId, street_name])
 }
 

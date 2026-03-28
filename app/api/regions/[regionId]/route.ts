@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { isDeliveryStaff } from "../../../../lib/api/deliveryStaff"
 import { prisma } from "../../../../lib/prisma/client"
 
 export async function PUT(
@@ -15,7 +16,7 @@ export async function PUT(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  if (token.role !== "admin") {
+  if (!isDeliveryStaff(token.role as string | undefined)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
@@ -51,7 +52,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  if (token.role !== "admin") {
+  if (!isDeliveryStaff(token.role as string | undefined)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
