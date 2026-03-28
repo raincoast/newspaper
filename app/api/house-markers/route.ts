@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { isPublicDemoRegion } from "../../../lib/api/regionAccess"
 import { prisma } from "../../../lib/prisma/client"
 
 function isSameDay(a: Date, b: Date) {
@@ -12,17 +13,22 @@ function isSameDay(a: Date, b: Date) {
 
 export async function GET(request: NextRequest) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
-  if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
   const regionId = searchParams.get("regionId")
   if (!regionId) return NextResponse.json({ error: "regionId required" }, { status: 400 })
 
-  if (token.role !== "admin") {
+  if (!token?.sub) {
+    const pub = await isPublicDemoRegion(regionId)
+    if (!pub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  } else if (token.role !== "admin") {
     const assignment = await prisma.userRegionAssignment.findUnique({
       where: { userId_regionId: { userId: token.sub, regionId } }
     })
-    if (!assignment) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    const pub = await isPublicDemoRegion(regionId)
+    if (!assignment && !pub) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
   }
 
   const regionRow = await prisma.region.findUnique({

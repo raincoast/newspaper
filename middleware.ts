@@ -5,8 +5,8 @@ import { getToken } from "next-auth/jwt"
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  const isAuthPage = pathname.startsWith("/login")
-  const isDashboardPage = pathname.startsWith("/map") || pathname.startsWith("/admin")
+  const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/register")
+  const needsAdmin = pathname.startsWith("/admin")
 
   const token = await getToken({
     req: request,
@@ -17,7 +17,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/map", request.url))
   }
 
-  if (isDashboardPage && !token) {
+  if (needsAdmin && !token) {
     return NextResponse.redirect(new URL("/login", request.url))
   }
 
@@ -29,6 +29,6 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/login", "/map/:path*", "/admin/:path*"]
+  matcher: ["/login", "/register", "/admin/:path*"]
 }
 

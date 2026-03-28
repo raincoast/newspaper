@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { canCourierAccessRegion } from "../../../../lib/api/regionAccess"
 import { prisma } from "../../../../lib/prisma/client"
 
 import type { StreetRuleType } from "../../../../lib/rules-engine/streetRuleEngine"
@@ -30,7 +31,6 @@ export async function PUT(
 ) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
   if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  if (token.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
   const body = (await request.json().catch(() => null)) as
     | {
@@ -49,6 +49,11 @@ export async function PUT(
     where: { id: params.streetRuleId }
   })
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  if (token.role !== "admin") {
+    const ok = await canCourierAccessRegion(token.sub, existing.regionId)
+    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
 
   const nextStreetName = body.street_name?.trim() || existing.street_name
   const nextRuleType = isStreetRuleType(body.rule_type) ? body.rule_type : existing.rule_type
@@ -105,7 +110,16 @@ export async function DELETE(
 ) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
   if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  if (token.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+
+  const rule = await prisma.streetRule.findUnique({
+    where: { id: params.streetRuleId },
+    select: { regionId: true }
+  })
+  if (!rule) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  if (token.role !== "admin") {
+    const ok = await canCourierAccessRegion(token.sub, rule.regionId)
+    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
 
   // 删除规则前，先解除 HouseMarker.streetRuleId 引用，避免关系限制
   await prisma.$transaction(async (tx) => {

@@ -1,12 +1,17 @@
 "use client"
 
+import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { signIn } from "next-auth/react"
 import PrimaryButton from "../../../components/ui/PrimaryButton"
 
 export default function LoginPage() {
   const router = useRouter()
+  const [registered, setRegistered] = useState(false)
+  useEffect(() => {
+    setRegistered(new URLSearchParams(window.location.search).get("registered") === "1")
+  }, [])
   const callbackUrl = "/map"
 
   const [email, setEmail] = useState("")
@@ -21,6 +26,9 @@ export default function LoginPage() {
         <div>
           <h1 className="text-2xl font-bold">投递辅助系统</h1>
           <p className="mt-2 text-sm text-gray-600">邮箱密码登录（admin / courier）</p>
+          {registered ? (
+            <p className="mt-2 text-sm text-green-700">注册成功，请使用刚才的邮箱密码登录。</p>
+          ) : null}
         </div>
 
         <div className="rounded-2xl bg-white/70 p-4 shadow-sm backdrop-blur">
@@ -90,6 +98,16 @@ export default function LoginPage() {
           <div className="mt-1">admin: demo.admin@example.com / Admin1234!</div>
           <div>courier: demo.courier@example.com / Courier1234!</div>
         </div>
+
+        <p className="text-center text-sm text-gray-600">
+          <Link href="/map" className="font-medium text-gray-900 underline">
+            以访客浏览地图（无需登录）
+          </Link>
+          {" · "}
+          <Link href="/register" className="font-medium text-gray-900 underline">
+            注册新账号
+          </Link>
+        </p>
       </div>
     </div>
   )

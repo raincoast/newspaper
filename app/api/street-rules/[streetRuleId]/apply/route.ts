@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { canCourierAccessRegion } from "../../../../../lib/api/regionAccess"
 import { prisma } from "../../../../../lib/prisma/client"
 
 import {
@@ -14,7 +15,6 @@ export async function POST(
 ) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
   if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  if (token.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
   const rule = await prisma.streetRule.findUnique({
     where: { id: params.streetRuleId },
@@ -31,6 +31,11 @@ export async function POST(
   })
 
   if (!rule) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  if (token.role !== "admin") {
+    const ok = await canCourierAccessRegion(token.sub, rule.regionId)
+    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+  }
 
   const houses = await prisma.houseMarker.findMany({
     where: {

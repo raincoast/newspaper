@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt"
 import { NextRequest, NextResponse } from "next/server"
+import { canCourierAccessRegion, isPublicDemoRegion } from "../../../lib/api/regionAccess"
 import { prisma } from "../../../lib/prisma/client"
 
 import type { StreetRuleType } from "../../../lib/rules-engine/streetRuleEngine"
@@ -26,13 +27,33 @@ function isStreetRuleType(v: unknown): v is StreetRuleType {
 
 export async function GET(request: NextRequest) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
-  if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const { searchParams } = new URL(request.url)
+  const regionId = searchParams.get("regionId") ?? undefined
+
+  if (!token?.sub) {
+    if (!regionId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    const pub = await isPublicDemoRegion(regionId)
+    if (!pub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    const rules = await prisma.streetRule.findMany({
+      where: { regionId },
+      orderBy: { createdAt: "desc" }
+    })
+    return NextResponse.json({
+      rules: rules.map((r) => ({
+        id: r.id,
+        regionId: r.regionId,
+        street_name: r.street_name,
+        rule_type: r.rule_type,
+        from_number: r.from_number,
+        to_number: r.to_number,
+        include_numbers: r.include_numbers,
+        exclude_numbers: r.exclude_numbers
+      }))
+    })
+  }
 
   const role = token.role
   const userId = token.sub
-
-  const { searchParams } = new URL(request.url)
-  const regionId = searchParams.get("regionId") ?? undefined
 
   const where =
     role === "admin"
@@ -65,7 +86,6 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET })
   if (!token?.sub) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  if (token.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
   const body = (await request.json().catch(() => null)) as
     | {
@@ -82,6 +102,11 @@ export async function POST(request: NextRequest) {
   if (!body) return NextResponse.json({ error: "Invalid body" }, { status: 400 })
   if (!body.regionId || !body.street_name || !isStreetRuleType(body.rule_type)) {
     return NextResponse.json({ error: "regionId, street_name, rule_type are required" }, { status: 400 })
+  }
+
+  if (token.role !== "admin") {
+    const ok = await canCourierAccessRegion(token.sub, body.regionId)
+    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const include_numbers = normalizeStringArray(body.include_numbers)

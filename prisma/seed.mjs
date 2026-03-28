@@ -49,16 +49,35 @@ async function main() {
     throw new Error("Demo users not found after upsert.")
   }
 
-  const regionNames = ["投递区 A", "投递区 B"]
-  const regions = []
+  const DEMO_REGION_NAME = "Demo · Konstanz (Jacob-Burckhardt-Straße)"
 
-  for (const n of regionNames) {
-    let region = await prisma.region.findFirst({ where: { name: n } })
-    if (!region) {
-      region = await prisma.region.create({ data: { name: n } })
-    }
-    regions.push(region)
+  let demoRegion = await prisma.region.findFirst({
+    where: { OR: [{ name: DEMO_REGION_NAME }, { name: "投递区 A" }] }
+  })
+  if (!demoRegion) {
+    demoRegion = await prisma.region.create({
+      data: { name: DEMO_REGION_NAME, isPublicDemo: true }
+    })
+  } else {
+    demoRegion = await prisma.region.update({
+      where: { id: demoRegion.id },
+      data: { name: DEMO_REGION_NAME, isPublicDemo: true }
+    })
   }
+
+  let regionB = await prisma.region.findFirst({ where: { name: "投递区 B" } })
+  if (!regionB) {
+    regionB = await prisma.region.create({
+      data: { name: "投递区 B", isPublicDemo: false }
+    })
+  } else if (regionB.isPublicDemo) {
+    regionB = await prisma.region.update({
+      where: { id: regionB.id },
+      data: { isPublicDemo: false }
+    })
+  }
+
+  const regions = [demoRegion, regionB]
 
   for (const region of regions) {
     const adminAssign = await prisma.userRegionAssignment.findFirst({
@@ -70,8 +89,7 @@ async function main() {
       })
     }
 
-    // courier 先只分配到 A（MVP 演示“只能切换已分配区域”）
-    if (region.name === "投递区 A") {
+    if (region.id === demoRegion.id) {
       const courierAssign = await prisma.userRegionAssignment.findFirst({
         where: { userId: courier.id, regionId: region.id }
       })
@@ -83,12 +101,8 @@ async function main() {
     }
   }
 
-  // Seed demo house markers for map layer demo
-  const regionA = regions.find((r) => r.name === "投递区 A")
-  const regionB = regions.find((r) => r.name === "投递区 B")
-
-  if (regionA) {
-    await prisma.houseMarker.deleteMany({ where: { regionId: regionA.id } })
+  if (demoRegion) {
+    await prisma.houseMarker.deleteMany({ where: { regionId: demoRegion.id } })
     // Konstanz · Jacob-Burckhardt-Straße — OSM 建筑 Sonnenbühl West I 门牌 4，近邻坐标沿街道推算至与瓦片上门牌对齐
     const jbs4 = { lat: 47.6815884, lng: 9.184665 }
     const jbs2 = { lat: 47.681628, lng: 9.184318 }
@@ -96,7 +110,7 @@ async function main() {
     await prisma.houseMarker.createMany({
       data: [
         {
-          regionId: regionA.id,
+          regionId: demoRegion.id,
           street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "2",
           current_housenumber: "2",
@@ -106,7 +120,7 @@ async function main() {
           lng: jbs2.lng
         },
         {
-          regionId: regionA.id,
+          regionId: demoRegion.id,
           street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "4",
           current_housenumber: "4",
@@ -116,7 +130,7 @@ async function main() {
           lng: jbs4.lng
         },
         {
-          regionId: regionA.id,
+          regionId: demoRegion.id,
           street_name: "Jacob-Burckhardt-Straße",
           osm_default_housenumber: "6",
           current_housenumber: "6",

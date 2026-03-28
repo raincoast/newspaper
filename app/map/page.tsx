@@ -1,29 +1,33 @@
-import { prisma } from "../../lib/prisma/client"
-import { requireUser } from "../../lib/auth/guards"
+import { getServerSession } from "next-auth"
 import MapView from "../../components/map/MapView"
 import type { MapBoundsRing } from "../../components/map/types"
+import { authOptions } from "../../lib/auth/options"
+import { prisma } from "../../lib/prisma/client"
 
 export default async function MapPage({
   searchParams
 }: {
   searchParams: { regionId?: string }
 }) {
-  const session = await requireUser()
+  const session = await getServerSession(authOptions)
+  const user = session?.user
 
-  const role = session.user.role
-  const userId = session.user.id
-
-  const accessibleRegions =
-    role === "admin"
+  const accessibleRegions = user
+    ? user.role === "admin"
       ? await prisma.region.findMany({
           orderBy: { createdAt: "desc" },
           select: { id: true, name: true, mapBoundsRing: true }
         })
       : await prisma.region.findMany({
-          where: { userAssignments: { some: { userId } } },
+          where: { userAssignments: { some: { userId: user.id } } },
           orderBy: { createdAt: "desc" },
           select: { id: true, name: true, mapBoundsRing: true }
         })
+    : await prisma.region.findMany({
+        where: { isPublicDemo: true },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, mapBoundsRing: true }
+      })
 
   const selectedRegionId = (() => {
     const requested = searchParams.regionId
@@ -34,13 +38,14 @@ export default async function MapPage({
 
   return (
     <MapView
+      guestMode={!user}
       regions={accessibleRegions.map((r) => ({
         id: r.id,
         name: r.name,
         mapBoundsRing: r.mapBoundsRing as MapBoundsRing | null
       }))}
       initialRegionId={selectedRegionId}
-      isAdmin={role === "admin"}
+      isAdmin={user?.role === "admin"}
     />
   )
 }

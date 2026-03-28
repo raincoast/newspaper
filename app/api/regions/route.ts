@@ -23,7 +23,14 @@ export async function GET(request: NextRequest) {
   })
 
   if (!token?.sub) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    const demo = await prisma.region.findMany({
+      where: { isPublicDemo: true },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, mapBoundsRing: true }
+    })
+    return NextResponse.json({
+      regions: demo.map(serializeRegion)
+    })
   }
 
   const manage = request.nextUrl.searchParams.get("manage") === "1"

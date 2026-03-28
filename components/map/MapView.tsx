@@ -8,6 +8,7 @@ import { signOut } from "next-auth/react"
 import { useRouter } from "next/navigation"
 
 import DeliveryFocusSheet from "./DeliveryFocusSheet"
+import DeliveryPointPickerSheet from "./DeliveryPointPickerSheet"
 import MarkerActionSheet from "./MarkerActionSheet"
 import RegionManageModal from "./RegionManageModal"
 import RegionSwitcher from "./RegionSwitcher"
@@ -52,11 +53,13 @@ type MarkerSheet = "none" | "focus" | "actions"
 export default function MapView({
   regions,
   initialRegionId,
-  isAdmin = false
+  isAdmin = false,
+  guestMode = false
 }: {
   regions: RegionLite[]
   initialRegionId: string | null
   isAdmin?: boolean
+  guestMode?: boolean
 }) {
   const router = useRouter()
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
@@ -82,6 +85,7 @@ export default function MapView({
   const [accountOpen, setAccountOpen] = useState(false)
 
   const [manageOpen, setManageOpen] = useState(false)
+  const [deliveryPickerOpen, setDeliveryPickerOpen] = useState(false)
   const [editRegionId, setEditRegionId] = useState<string | null>(null)
   const [searchQ, setSearchQ] = useState("")
   const [searchHits, setSearchHits] = useState<
@@ -249,11 +253,21 @@ export default function MapView({
         ...m,
         is_delivery_focus: Boolean(m.is_delivery_focus)
       }))
-      setMarkers(normalized)
+      let merged = normalized
+      if (guestMode && selectedRegionId && typeof window !== "undefined") {
+        const stored = sessionStorage.getItem(`guest-delivery-focus:${selectedRegionId}`)
+        if (stored) {
+          merged = normalized.map((m) => ({
+            ...m,
+            is_delivery_focus: m.id === stored
+          }))
+        }
+      }
+      setMarkers(merged)
       setApartmentGroups(data.apartment_groups ?? [])
     }
     loadMarkers()
-  }, [selectedRegionId])
+  }, [selectedRegionId, guestMode])
 
   useEffect(() => {
     const map = mapRef.current
@@ -378,8 +392,8 @@ export default function MapView({
 
   const geoOpts: PositionOptions = {
     enableHighAccuracy: true,
-    maximumAge: 60_000,
-    timeout: 20_000
+    maximumAge: 0,
+    timeout: 12_000
   }
 
   /** 用户点击按钮触发，兼容 Safari 无痕下 watchPosition 不弹窗的问题 */
@@ -405,21 +419,10 @@ export default function MapView({
     )
   }
 
+  /** 不在首屏自动 watch：iOS Safari 常在无用户手势时静默失败；请点右下角「定位」触发。 */
   useEffect(() => {
-    if (!("geolocation" in navigator)) {
-      setGeoError("当前浏览器不支持定位")
-      return
-    }
-
-    setGeoError(null)
-    geoWatchIdRef.current = navigator.geolocation.watchPosition(
-      applyGeoPosition,
-      onGeoError,
-      geoOpts
-    )
-
     return () => {
-      if (geoWatchIdRef.current !== null) {
+      if (geoWatchIdRef.current !== null && "geolocation" in navigator) {
         navigator.geolocation.clearWatch(geoWatchIdRef.current)
         geoWatchIdRef.current = null
       }
@@ -482,8 +485,51 @@ export default function MapView({
     closeMarkerSheets()
   }
 
+  function applyLocalDeliveryFocus(markerId: string) {
+    setMarkers((prev) =>
+      prev.map((m) => ({
+        ...m,
+        is_delivery_focus: m.id === markerId
+      }))
+    )
+  }
+
+  async function pickDeliveryFocusFromList(markerId: string) {
+    if (!selectedRegionId) return
+    if (guestMode) {
+      try {
+        sessionStorage.setItem(`guest-delivery-focus:${selectedRegionId}`, markerId)
+      } catch {
+        /* ignore quota / private mode */
+      }
+      applyLocalDeliveryFocus(markerId)
+      setDeliveryPickerOpen(false)
+      return
+    }
+    setFocusLoading(true)
+    const res = await fetch(`/api/regions/${selectedRegionId}/delivery-focus`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ houseMarkerId: markerId })
+    })
+    setFocusLoading(false)
+    if (!res.ok) return
+    applyLocalDeliveryFocus(markerId)
+    setDeliveryPickerOpen(false)
+  }
+
   async function setRegionDeliveryFocus() {
     if (!selectedMarker || !selectedRegionId) return
+    if (guestMode) {
+      try {
+        sessionStorage.setItem(`guest-delivery-focus:${selectedRegionId}`, selectedMarker.id)
+      } catch {
+        /* ignore */
+      }
+      applyLocalDeliveryFocus(selectedMarker.id)
+      closeMarkerSheets()
+      return
+    }
     setFocusLoading(true)
     const res = await fetch(`/api/regions/${selectedRegionId}/delivery-focus`, {
       method: "PATCH",
@@ -493,12 +539,7 @@ export default function MapView({
     setFocusLoading(false)
     if (!res.ok) return
 
-    setMarkers((prev) =>
-      prev.map((m) => ({
-        ...m,
-        is_delivery_focus: m.id === selectedMarker.id
-      }))
-    )
+    applyLocalDeliveryFocus(selectedMarker.id)
     closeMarkerSheets()
   }
 
@@ -699,6 +740,17 @@ export default function MapView({
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
             <div className="flex items-end justify-between px-3 pb-2">
               <div className="pointer-events-auto flex flex-col gap-2">
+                <button
+                  type="button"
+                  className={iconBtn}
+                  aria-label="设置投递点"
+                  onClick={() => setDeliveryPickerOpen(true)}
+                >
+                  <span className="material-symbols-outlined text-[22px] leading-none">
+                    add_location
+                  </span>
+                </button>
+
                 <div className="relative">
                   <button
                     type="button"
@@ -719,37 +771,58 @@ export default function MapView({
                         onClick={() => setAccountOpen(false)}
                       />
                       <div className="absolute bottom-full left-0 z-[36] mb-2 min-w-[10rem] rounded-xl border border-black/10 bg-white/95 py-1 text-sm shadow-lg backdrop-blur">
-                        {isAdmin ? (
-                          <Link
-                            href="/admin"
-                            className="block px-3 py-2 text-gray-800 hover:bg-black/5"
-                            onClick={() => setAccountOpen(false)}
-                          >
-                            管理后台
-                          </Link>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="w-full px-3 py-2 text-left text-gray-800 hover:bg-black/5"
-                          onClick={() => signOut({ callbackUrl: "/login" })}
-                        >
-                          退出登录
-                        </button>
+                        {guestMode ? (
+                          <>
+                            <Link
+                              href="/login"
+                              className="block px-3 py-2 text-gray-800 hover:bg-black/5"
+                              onClick={() => setAccountOpen(false)}
+                            >
+                              登录
+                            </Link>
+                            <Link
+                              href="/register"
+                              className="block px-3 py-2 text-gray-800 hover:bg-black/5"
+                              onClick={() => setAccountOpen(false)}
+                            >
+                              注册账号
+                            </Link>
+                          </>
+                        ) : (
+                          <>
+                            {isAdmin ? (
+                              <Link
+                                href="/admin"
+                                className="block px-3 py-2 text-gray-800 hover:bg-black/5"
+                                onClick={() => setAccountOpen(false)}
+                              >
+                                管理后台
+                              </Link>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="w-full px-3 py-2 text-left text-gray-800 hover:bg-black/5"
+                              onClick={() => signOut({ callbackUrl: "/map" })}
+                            >
+                              退出登录
+                            </button>
+                          </>
+                        )}
                       </div>
                     </>
                   ) : null}
                 </div>
 
-                <button
-                  type="button"
-                  className={iconBtn}
-                  aria-label="区域与地图"
-                  onClick={() => setManageOpen(true)}
-                >
-                  <span className="material-symbols-outlined text-[22px] leading-none">
-                    manage_accounts
-                  </span>
-                </button>
+                {!guestMode ? (
+                  <button
+                    type="button"
+                    className={iconBtn}
+                    aria-label="区域与地图"
+                    onClick={() => setManageOpen(true)}
+                  >
+                    <span className="material-symbols-outlined text-[22px] leading-none">map</span>
+                  </button>
+                ) : null}
 
                 <button
                   type="button"
@@ -821,6 +894,14 @@ export default function MapView({
             loading={focusLoading}
             onClose={closeMarkerSheets}
             onSetDeliveryFocus={() => void setRegionDeliveryFocus()}
+          />
+
+          <DeliveryPointPickerSheet
+            open={deliveryPickerOpen}
+            onClose={() => setDeliveryPickerOpen(false)}
+            markers={markers}
+            loading={focusLoading}
+            onPick={(id) => void pickDeliveryFocusFromList(id)}
           />
         </>
       )}
