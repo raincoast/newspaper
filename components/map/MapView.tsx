@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { FeatureCollection } from "geojson"
 import maplibregl, { type LngLatBoundsLike, type Map } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 import Link from "next/link"
@@ -14,8 +15,14 @@ import { MAP_GLASS_PANEL } from "./mapGlass"
 import RegionManageModal from "./RegionManageModal"
 import RegionSwitcher from "./RegionSwitcher"
 import StatsCard from "./StatsCard"
-import StreetPickPanel from "./StreetPickPanel"
 import StreetRulesModal from "./StreetRulesModal"
+import {
+  removeStreetBrowseOverlay,
+  STREET_BROWSE_CLICK_LAYERS,
+  STREET_BROWSE_HIT_TOP_LAYER,
+  STREET_BROWSE_SYMBOL_LAYER,
+  upsertStreetBrowseOverlay
+} from "./StreetBrowseLayer"
 import type { ApartmentGroupOverlay, DeliveryStatus, HouseMarkerDTO, MapBoundsRing, RegionLite } from "./types"
 import {
   bindHouseMarkerClick,
@@ -86,7 +93,11 @@ export default function MapView({
 
   const [manageOpen, setManageOpen] = useState(false)
   const [deliveryPickerOpen, setDeliveryPickerOpen] = useState(false)
-  const [streetPickMode, setStreetPickMode] = useState(false)
+  const [streetBrowseMode, setStreetBrowseMode] = useState(false)
+  const [streetBrowseLoading, setStreetBrowseLoading] = useState(false)
+  const [streetBrowseError, setStreetBrowseError] = useState<string | null>(null)
+  const [streetBrowseStreets, setStreetBrowseStreets] = useState<FeatureCollection | null>(null)
+  const [streetBrowseNeedRingTip, setStreetBrowseNeedRingTip] = useState(false)
   const [streetRulesStreet, setStreetRulesStreet] = useState<string | null>(null)
   const [rulePreviewIds, setRulePreviewIds] = useState<Set<string>>(() => new Set())
   const [editRegionId, setEditRegionId] = useState<string | null>(null)
@@ -100,7 +111,7 @@ export default function MapView({
   const geoWatchIdRef = useRef<number | null>(null)
 
   const editModeRef = useRef<string | null>(null)
-  const streetPickModeRef = useRef(false)
+  const streetBrowseModeRef = useRef(false)
   const deliveryActiveRef = useRef(false)
   const regionsRef = useRef(regionsLocal)
   regionsRef.current = regionsLocal
@@ -123,21 +134,13 @@ export default function MapView({
   }, [deliveryActive])
 
   useEffect(() => {
-    streetPickModeRef.current = streetPickMode
-  }, [streetPickMode])
+    streetBrowseModeRef.current = streetBrowseMode
+  }, [streetBrowseMode])
 
   const selectedMarker = useMemo(
     () => markers.find((m) => m.id === selectedMarkerId) ?? null,
     [markers, selectedMarkerId]
   )
-
-  const streetNames = useMemo(() => {
-    const s = new Set<string>()
-    for (const m of markers) {
-      if (m.street_name) s.add(m.street_name)
-    }
-    return Array.from(s).sort((a, b) => a.localeCompare(b))
-  }, [markers])
 
   const markersOnStreet = useMemo(() => {
     if (!streetRulesStreet) return []
@@ -230,6 +233,7 @@ export default function MapView({
       container: mapContainerRef.current,
       style: {
         version: 8,
+        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
         sources: {
           osm: {
             type: "raster",
@@ -262,6 +266,7 @@ export default function MapView({
       setMapReady(false)
       boundsEditorRef.current?.destroy()
       boundsEditorRef.current = null
+      removeStreetBrowseOverlay(mapRef.current)
       removeUserLocationLayer(mapRef.current)
       removeHouseMarkerLayer(mapRef.current)
       mapRef.current.remove()
@@ -309,11 +314,127 @@ export default function MapView({
     const map = mapRef.current
     if (!map || !map.isStyleLoaded() || !mapReady) return
     bindHouseMarkerClick(map, (markerId) => {
-      if (editModeRef.current || streetPickModeRef.current) return
+      if (editModeRef.current || streetBrowseModeRef.current) return
       setSelectedMarkerId(markerId)
       setMarkerSheet(deliveryActiveRef.current ? "actions" : "focus")
     })
-  }, [mapReady, markers, nearbyMarkers, userLocation, streetPickMode])
+  }, [mapReady, markers, nearbyMarkers, userLocation, streetBrowseMode])
+
+  useEffect(() => {
+    if (streetBrowseMode) return
+    setStreetBrowseStreets(null)
+    setStreetBrowseError(null)
+    setStreetBrowseLoading(false)
+  }, [streetBrowseMode])
+
+  useEffect(() => {
+    if (!streetBrowseNeedRingTip) return
+    const t = setTimeout(() => setStreetBrowseNeedRingTip(false), 4200)
+    return () => clearTimeout(t)
+  }, [streetBrowseNeedRingTip])
+
+  useEffect(() => {
+    if (!streetBrowseMode || !mapReady || !selectedRegionId) return
+    const region = regionsLocal.find((r) => r.id === selectedRegionId)
+    const ring = normalizeRing(region?.mapBoundsRing)
+    if (!ring) return
+
+    let cancelled = false
+    setStreetBrowseLoading(true)
+    setStreetBrowseError(null)
+    setStreetBrowseStreets(null)
+
+    void (async () => {
+      try {
+        const res = await fetch("/api/osm-streets-in-region", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ring })
+        })
+        const data = (await res.json()) as { geojson?: FeatureCollection; error?: string }
+        if (cancelled) return
+        if (!res.ok) {
+          setStreetBrowseError(data.error ?? "无法加载道路数据")
+          setStreetBrowseStreets(null)
+          return
+        }
+        setStreetBrowseStreets(data.geojson ?? { type: "FeatureCollection", features: [] })
+      } catch {
+        if (!cancelled) {
+          setStreetBrowseError("无法加载道路数据")
+          setStreetBrowseStreets(null)
+        }
+      } finally {
+        if (!cancelled) setStreetBrowseLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [streetBrowseMode, mapReady, selectedRegionId, regionsLocal])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map?.isStyleLoaded() || !mapReady) return
+    const region = regionsLocal.find((r) => r.id === selectedRegionId)
+    const ring = normalizeRing(region?.mapBoundsRing)
+    upsertStreetBrowseOverlay(map, {
+      active: streetBrowseMode,
+      ring: streetBrowseMode ? ring : null,
+      streets: streetBrowseStreets
+    })
+  }, [streetBrowseMode, streetBrowseStreets, selectedRegionId, regionsLocal, mapReady])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map?.isStyleLoaded() || !mapReady || !streetBrowseMode) return
+
+    const onClick = (e: maplibregl.MapMouseEvent) => {
+      if (!streetBrowseModeRef.current) return
+      const layers = [...STREET_BROWSE_CLICK_LAYERS].filter((id) => Boolean(map.getLayer(id)))
+      if (layers.length === 0) return
+      const feats = map.queryRenderedFeatures(e.point, { layers })
+      const f = feats.find((x) => {
+        const n = x.properties?.name
+        return typeof n === "string" && n.trim().length > 0
+      })
+      if (!f || typeof f.properties?.name !== "string") return
+      setStreetRulesStreet(f.properties.name.trim())
+    }
+
+    map.on("click", onClick)
+    return () => {
+      map.off("click", onClick)
+    }
+  }, [streetBrowseMode, mapReady, streetBrowseStreets])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map?.isStyleLoaded() || !mapReady || !streetBrowseMode) return
+    const layers = [STREET_BROWSE_HIT_TOP_LAYER, STREET_BROWSE_SYMBOL_LAYER].filter((id) =>
+      Boolean(map.getLayer(id))
+    )
+    if (layers.length === 0) return
+
+    const enter = () => {
+      map.getCanvas().style.cursor = "pointer"
+    }
+    const leave = () => {
+      map.getCanvas().style.cursor = ""
+    }
+    for (const id of layers) {
+      map.on("mouseenter", id, enter)
+      map.on("mouseleave", id, leave)
+    }
+    return () => {
+      for (const id of layers) {
+        map.off("mouseenter", id, enter)
+        map.off("mouseleave", id, leave)
+      }
+      map.getCanvas().style.cursor = ""
+    }
+  }, [streetBrowseMode, mapReady, streetBrowseStreets])
 
   const fitKey = useMemo(() => {
     const r = regionsLocal.find((x) => x.id === selectedRegionId)
@@ -324,7 +445,7 @@ export default function MapView({
   const lastFitKeyRef = useRef("")
   useEffect(() => {
     const map = mapRef.current
-    if (!map?.isStyleLoaded() || editRegionId) return
+    if (!map?.isStyleLoaded() || editRegionId || streetBrowseMode) return
     if (lastFitKeyRef.current === fitKey) return
     lastFitKeyRef.current = fitKey
 
@@ -358,7 +479,7 @@ export default function MapView({
       ] as [[number, number], [number, number]]
     )
     map.fitBounds(bounds as LngLatBoundsLike, { padding: 60, duration: 500, maxZoom: 17 })
-  }, [fitKey, markers, regionsLocal, selectedRegionId, editRegionId])
+  }, [fitKey, markers, regionsLocal, selectedRegionId, editRegionId, streetBrowseMode])
 
   useEffect(() => {
     const map = mapRef.current
@@ -758,7 +879,7 @@ export default function MapView({
             </div>
           </div>
 
-          {nextMarker && !streetPickMode ? (
+          {nextMarker && !streetBrowseMode ? (
             <div className="pointer-events-none absolute left-3 top-[5.5rem] z-30 rounded-xl bg-green-600 px-3 py-2 text-white shadow-sm">
               <div className="text-[11px] opacity-90">下一个投递门牌</div>
               <div className="text-lg font-bold">{nextMarker.marker.current_housenumber}</div>
@@ -773,15 +894,39 @@ export default function MapView({
             </div>
           ) : null}
 
-          {streetPickMode && !guestMode && !streetRulesStreet ? (
-            <StreetPickPanel
-              streets={streetNames}
-              onPickStreet={(name) => setStreetRulesStreet(name)}
-              onDone={() => {
-                setStreetPickMode(false)
-                setRulePreviewIds(new Set())
-              }}
-            />
+          {streetBrowseNeedRingTip ? (
+            <div
+              className={`pointer-events-none absolute left-3 right-3 top-[5.5rem] z-[37] rounded-xl px-3 py-2 text-center text-xs text-amber-900 ${MAP_GLASS_PANEL}`}
+            >
+              请先用左侧「编辑区域」在地图上框选范围，再使用本功能。
+            </div>
+          ) : null}
+
+          {streetBrowseMode && !guestMode ? (
+            <div
+              className={`pointer-events-auto absolute left-3 right-3 top-[5.5rem] z-[38] max-h-[30vh] overflow-hidden sm:left-auto sm:right-3 sm:max-w-sm ${MAP_GLASS_PANEL} rounded-2xl`}
+            >
+              <div className="flex items-center justify-between border-b border-black/10 px-3 py-2">
+                <span className="text-xs font-semibold text-gray-900">街道规则 · 地图选街</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStreetBrowseMode(false)
+                    setStreetRulesStreet(null)
+                    setRulePreviewIds(new Set())
+                  }}
+                  className="rounded-lg px-2 py-1 text-xs text-gray-700 hover:bg-black/5"
+                >
+                  完成
+                </button>
+              </div>
+              <div className="px-3 py-2.5 text-xs leading-relaxed text-gray-600">
+                {streetBrowseLoading
+                  ? "正在从 OpenStreetMap 加载与区域相交的道路…"
+                  : streetBrowseError ??
+                    "地图已显示区域范围；与框选区域相交的道路为蓝色加粗路名（带浅色描边）。点击路名或道路可打开规则设置。"}
+              </div>
+            </div>
           ) : null}
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
@@ -807,10 +952,28 @@ export default function MapView({
                 <button
                   type="button"
                   className={iconBtn}
-                  aria-label={guestMode ? "设置投递点" : "街道规则与投递点"}
+                  aria-label={guestMode ? "设置投递点" : "街道规则（地图选街）"}
                   onClick={() => {
-                    if (guestMode) setDeliveryPickerOpen(true)
-                    else setStreetPickMode(true)
+                    if (guestMode) {
+                      setDeliveryPickerOpen(true)
+                      return
+                    }
+                    if (!selectedRegionId) return
+                    const region = regionsLocal.find((r) => r.id === selectedRegionId)
+                    const ring = normalizeRing(region?.mapBoundsRing)
+                    if (!ring) {
+                      setStreetBrowseNeedRingTip(true)
+                      return
+                    }
+                    setStreetBrowseMode(true)
+                    const map = mapRef.current
+                    if (map?.isStyleLoaded()) {
+                      map.fitBounds(ringToLngLatBounds(ring) as LngLatBoundsLike, {
+                        padding: 52,
+                        duration: 550,
+                        maxZoom: 19
+                      })
+                    }
                   }}
                 >
                   <span className="material-symbols-outlined text-[22px] leading-none">
@@ -989,7 +1152,6 @@ export default function MapView({
               }}
               onSaved={() => {
                 void loadMarkersForRegion()
-                setStreetPickMode(false)
                 setStreetRulesStreet(null)
                 setRulePreviewIds(new Set())
               }}
